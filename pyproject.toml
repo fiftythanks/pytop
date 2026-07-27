@@ -1,0 +1,28 @@
+[project]
+name = "pytop"
+version = "0.1.0"
+description = "An experimental Linux system monitor written from scratch in Python for educational purposes, inspired by the layout and UI of [btop](https://github.com/aristocratos/btop)."
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = []
+
+[project.scripts]
+pytop = "pytop.__main__:main"
+
+[tool.ruff]
+line-length = 80
+
+[tool.ruff.format]
+docstring-code-format = true
+docstring-code-line-length = 72
+quote-style = "single"
+skip-magic-trailing-comma = true
+
+[tool.basedpyright]
+typeCheckingMode = "strict"
+
+[tool.pytest]
+pythonpath = ["src"]
+
+[dependency-groups]
+dev = ["pytest>=9.1.1", "ruff>=0.16.0"]
