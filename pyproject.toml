@@ -23,6 +23,13 @@ typeCheckingMode = "strict"
 
 [tool.pytest]
 pythonpath = ["src"]
+strict = true
+addopts = ["--import-mode=importlib"]
 
 [dependency-groups]
-dev = ["pytest>=9.1.1", "ruff>=0.16.0"]
+dev = [
+    "prek>=0.5.0",
+    "pytest>=9.1.1",
+    "pytest-cov>=7.1.0",
+    "ruff>=0.16.0",
+]
