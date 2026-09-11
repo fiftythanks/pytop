@@ -154,6 +154,15 @@ wheels = [
 ]
 
 [[package]]
+name = "pyrsistent"
+version = "0.20.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/ce/3a/5031723c09068e9c8c2f0bc25c3a9245f2b1d1aea8396c787a408f2b95ca/pyrsistent-0.20.0.tar.gz", hash = "sha256:4c48f78f62ab596c679086084d0dd13254ae4f3d6c72a83ffdf5ebdef8f265a4", size = 103642, upload-time = "2023-10-25T21:06:56.342Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/23/88/0acd180010aaed4987c85700b7cc17f9505f3edb4e5873e4dc67f613e338/pyrsistent-0.20.0-py3-none-any.whl", hash = "sha256:c55acc4733aad6560a7f5f818466631f07efc001fd023f34a6c203f8b6df0f0b", size = 58106, upload-time = "2023-10-25T21:06:54.387Z" },
+]
+
+[[package]]
 name = "pytest"
 version = "9.1.1"
 source = { registry = "https://pypi.org/simple" }
@@ -187,6 +196,9 @@ wheels = [
 name = "pytop"
 version = "0.1.0"
 source = { virtual = "." }
+dependencies = [
+    { name = "pyrsistent" },
+]
 
 [package.dev-dependencies]
 dev = [
@@ -198,6 +210,7 @@ dev = [
 ]
 
 [package.metadata]
+requires-dist = [{ name = "pyrsistent", specifier = ">=0.20.0" }]
 
 [package.metadata.requires-dev]
 dev = [
