@@ -3,6 +3,9 @@ from typing import TypedDict
 
 import pytest
 
+PERMISSION_DENIED_PID = 1
+PROCESS_NOT_FOUND_PID = 85395
+
 # =============================================================================
 # MOCK FOR os.kill()
 # =============================================================================
@@ -25,6 +28,12 @@ def os_kill_calls(monkeypatch: pytest.MonkeyPatch) -> OsKillCalls:
 
     def os_kill_mocked(pid: int, sig: int) -> None:
         calls.append(OsKillCall(pid=pid, sig=sig))
+
+        if pid == PERMISSION_DENIED_PID:
+            raise PermissionError
+
+        if pid == PROCESS_NOT_FOUND_PID:
+            raise ProcessLookupError
 
     monkeypatch.setattr(os, 'kill', os_kill_mocked)
 
@@ -55,6 +64,12 @@ def os_setpriority_calls(monkeypatch: pytest.MonkeyPatch) -> OsSetpriorityCalls:
 
     def os_setpriority_mocked(which: int, who: int, priority: int) -> None:
         calls.append(OsSetpriorityCall(which=which, who=who, priority=priority))
+
+        if which == os.PRIO_PROCESS and who == PERMISSION_DENIED_PID:
+            raise PermissionError
+
+        if which == os.PRIO_PROCESS and who == PROCESS_NOT_FOUND_PID:
+            raise ProcessLookupError
 
     monkeypatch.setattr(os, 'setpriority', os_setpriority_mocked)
 
