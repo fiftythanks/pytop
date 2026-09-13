@@ -2,8 +2,16 @@ import os
 
 import pytest
 
+from pytop.backend.proc.actions.errors import (
+    ProcActionProcessLookupError,
+    RenicePermissionError,
+)
 from pytop.backend.proc.actions.renice import renice
-from tests.backend.unit.proc.actions.conftest import OsSetpriorityCalls
+from tests.backend.unit.proc.actions.conftest import (
+    PERMISSION_DENIED_PID,
+    PROCESS_NOT_FOUND_PID,
+    OsSetpriorityCalls,
+)
 
 
 @pytest.mark.parametrize('priority', range(-20, 20))
@@ -44,5 +52,24 @@ def test_rejects_incorrect_priority(
     # ARRANGE
     pid = 123483
 
+    # ASSERT
     with pytest.raises(ValueError):
         renice(pid, priority)
+
+
+@pytest.mark.parametrize('priority', range(-20, 20))
+def test_raises_if_not_allowed_to_renice(
+    priority: int, os_setpriority_calls: OsSetpriorityCalls
+):
+    # ASSERT
+    with pytest.raises(RenicePermissionError):
+        renice(PERMISSION_DENIED_PID, priority)
+
+
+@pytest.mark.parametrize('priority', range(-20, 20))
+def test_raises_if_process_not_found(
+    priority: int, os_setpriority_calls: OsSetpriorityCalls
+):
+    # ASSERT
+    with pytest.raises(ProcActionProcessLookupError):
+        renice(PROCESS_NOT_FOUND_PID, priority)
