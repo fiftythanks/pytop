@@ -163,6 +163,11 @@ def create_process_monitor(proc_dir: Path = Path('/proc')) -> GetProcesses:
                     ]
 
                     for i, word in enumerate(stat_starting_from_state.split()):
+                        # DILEMMA: Are `guest_time` and `cguest_time` actually
+                        # of interest here? If I were parsing `/proc/stat`, they
+                        # would be already included into `user` and `nice`, so
+                        # using the numbers, I would double-count.
+                        #
                         # Only `utime`, `stime`, `cutime`, `cstime`,
                         # `starttime`, `guest_time` and `cguest_time` are of
                         # interest to us.
