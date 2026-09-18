@@ -4,9 +4,7 @@ version = "0.1.0"
 description = "An experimental Linux system monitor written from scratch in Python for educational purposes, inspired by the layout and UI of [btop](https://github.com/aristocratos/btop)."
 readme = "README.md"
 requires-python = ">=3.13"
-dependencies = [
-    "pyrsistent>=0.20.0",
-]
+dependencies = ["pyrsistent>=0.20.0"]
 
 [project.scripts]
 pytop = "pytop.__main__:main"
@@ -22,6 +20,7 @@ skip-magic-trailing-comma = true
 
 [tool.basedpyright]
 typeCheckingMode = "strict"
+extraPaths = ['src']
 
 [tool.pytest]
 pythonpath = ["src"]
@@ -30,9 +29,9 @@ addopts = ["--import-mode=importlib"]
 
 [dependency-groups]
 dev = [
-    "basedpyright>=1.39.10",
-    "prek>=0.5.0",
-    "pytest>=9.1.1",
-    "pytest-cov>=7.1.0",
-    "ruff>=0.16.0",
+  "basedpyright>=1.39.10",
+  "prek>=0.5.0",
+  "pytest>=9.1.1",
+  "pytest-cov>=7.1.0",
+  "ruff>=0.16.0",
 ]
