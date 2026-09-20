@@ -222,6 +222,10 @@ def create_cpu_monitor(proc_path: Path = Path('/proc')) -> GetCpuStats:
         else:
             warnings.warn(ProcStatFileNotFoundWarning(proc_stat_path))
 
+        # =====================================================================
+        # POWER CONSUMPTION
+        # =====================================================================
+
         return TmpCpuStats(
             name=name,
             uptime_sec=uptime_sec,

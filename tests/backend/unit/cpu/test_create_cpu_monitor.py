@@ -787,4 +787,10 @@ class TestGetCpuData:
                     assert value is None
 
     class TestPowerConsumptionWatt:
+        # TODO: Is correct.
+        # ParsingErrors:
+        #   TODO: No file.
+        #   TODO: No permission.
+        #   TODO: Wrong value.
+        #   TODO: Wrong index.
         pass
