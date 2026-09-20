@@ -7,21 +7,27 @@ from typing import Any
 class FileNotFoundWarning(UserWarning):
     """Raised when a non-critical file is missing from the file system."""
 
-    def __init__(self, filepath: str | Path):
+    def __init__(self, filepath: str | Path, message: str | None = None):
         self.filepath = Path(filepath)
 
-        msg = f'File {self.filepath.resolve()} not found.'
-        super().__init__(msg)
+        if message is None:
+            msg = f'File {self.filepath.resolve()} not found.'
+            super().__init__(msg)
+        else:
+            super().__init__(message)
 
 
 class PermissionWarning(UserWarning):
     """Raised when a non-critical file cannot be accessed due to permission issues."""
 
-    def __init__(self, filepath: str | Path):
+    def __init__(self, filepath: str | Path, message: str | None = None):
         self.filepath = Path(filepath)
 
-        msg = f'Permission denied for file {self.filepath.resolve()}.'
-        super().__init__(msg)
+        if message is None:
+            msg = f'Permission denied for file {self.filepath.resolve()}.'
+            super().__init__(msg)
+        else:
+            super().__init__(message)
 
 
 class ValueWarning(UserWarning):
