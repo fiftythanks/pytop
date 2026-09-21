@@ -141,12 +141,12 @@ def test_power_telemetry_not_found(sys_path: Path):
 class TestPowercap:
     """Tests related to the `powercap` dir search."""
 
-    def test_warns_if_no_powercap_dir(self, sys_path: Path):
+    def test_warns_if_no_powercap_dir(self, sys_path: Path, hwmon_path: Path):
         with warns(PowercapNotFoundWarning):
             discover_power_telemetry_sensors(sys_path)
 
     def test_warns_neither_interface_found(
-        self, sys_path: Path, powercap_path: Path
+        self, sys_path: Path, powercap_path: Path, hwmon_path: Path
     ):
         with warns(PowercapInterfaceNotFoundWarning):
             discover_power_telemetry_sensors(sys_path)
@@ -170,6 +170,7 @@ class TestPowercapInterfaces:
         dir_name: str,
         zone_prefix: str,
         all_zones: list[PowercapZone],
+        hwmon_path: Path,
     ):
         # ARRANGE
         backend_path = mock_powercap_backend(dir_name, *all_zones)
@@ -203,13 +204,14 @@ class TestPowercapInterfaces:
                     dir_name: str,
                     zone_prefix: str,
                     all_zones: list[PowercapZone],
+                    hwmon_path: Path,
                 ):
                     # ARRANGE
                     mock_powercap_backend(
                         dir_name,
                         PowercapZone(
                             relative_path=Path(f'{zone_prefix}0'),
-                            energy_uj=0,
+                            energy_uj=5,
                             name='',
                         ),
                     )
@@ -218,6 +220,9 @@ class TestPowercapInterfaces:
                     with warns(ZoneFileEmptyWarning, match=backend):
                         discover_power_telemetry_sensors(sys_path)
 
+                @mark.filterwarnings(
+                    'ignore::pytop.backend.cpu.power_telemetry.exceptions.ZoneFileEmptyWarning'
+                )
                 def test_sensor_is_included(
                     self,
                     sys_path: Path,
@@ -226,13 +231,14 @@ class TestPowercapInterfaces:
                     dir_name: str,
                     zone_prefix: str,
                     all_zones: list[PowercapZone],
+                    hwmon_path: Path,
                 ):
                     # ARRANGE
                     mock_powercap_backend(
                         dir_name,
                         PowercapZone(
                             relative_path=Path(f'{zone_prefix}0'),
-                            energy_uj=0,
+                            energy_uj=5,
                             name='',
                         ),
                     )
@@ -253,12 +259,13 @@ class TestPowercapInterfaces:
                     dir_name: str,
                     zone_prefix: str,
                     all_zones: list[PowercapZone],
+                    hwmon_path: Path,
                 ):
                     # ARRANGE
                     mock_powercap_backend(
                         dir_name,
                         PowercapZone(
-                            relative_path=Path(f'{zone_prefix}0'), energy_uj=0
+                            relative_path=Path(f'{zone_prefix}0'), energy_uj=5
                         ),
                     )
 
@@ -266,6 +273,9 @@ class TestPowercapInterfaces:
                     with warns(ZoneNameNotFoundWarning, match=backend):
                         discover_power_telemetry_sensors(sys_path)
 
+                @mark.filterwarnings(
+                    'ignore::pytop.backend.cpu.power_telemetry.exceptions.ZoneNameNotFoundWarning'
+                )
                 def test_falls_back_to_empty(
                     self,
                     sys_path: Path,
@@ -274,12 +284,13 @@ class TestPowercapInterfaces:
                     dir_name: str,
                     zone_prefix: str,
                     all_zones: list[PowercapZone],
+                    hwmon_path: Path,
                 ):
                     # ARRANGE
                     mock_powercap_backend(
                         dir_name,
                         PowercapZone(
-                            relative_path=Path(f'{zone_prefix}0'), energy_uj=0
+                            relative_path=Path(f'{zone_prefix}0'), energy_uj=5
                         ),
                     )
 
@@ -298,13 +309,14 @@ class TestPowercapInterfaces:
                     dir_name: str,
                     zone_prefix: str,
                     all_zones: list[PowercapZone],
+                    hwmon_path: Path,
                 ):
                     # ARRANGE
                     mock_powercap_backend(
                         dir_name,
                         PowercapZone(
                             relative_path=Path(f'{zone_prefix}0'),
-                            energy_uj=0,
+                            energy_uj=5,
                             name='zone',
                             name_mode=0o000,
                         ),
@@ -314,6 +326,9 @@ class TestPowercapInterfaces:
                     with warns(ZoneNamePermissionWarning, match=backend):
                         discover_power_telemetry_sensors(sys_path)
 
+                @mark.filterwarnings(
+                    'ignore::pytop.backend.cpu.power_telemetry.exceptions.ZoneNamePermissionWarning'
+                )
                 def test_falls_back_to_empty(
                     self,
                     sys_path: Path,
@@ -322,13 +337,14 @@ class TestPowercapInterfaces:
                     dir_name: str,
                     zone_prefix: str,
                     all_zones: list[PowercapZone],
+                    hwmon_path: Path,
                 ):
                     # ARRANGE
                     mock_powercap_backend(
                         dir_name,
                         PowercapZone(
                             relative_path=Path(f'{zone_prefix}0'),
-                            energy_uj=0,
+                            energy_uj=5,
                             name='zone',
                             name_mode=0o000,
                         ),
@@ -350,6 +366,7 @@ class TestPowercapInterfaces:
                     dir_name: str,
                     zone_prefix: str,
                     all_zones: list[PowercapZone],
+                    hwmon_path: Path,
                 ):
                     # ARRANGE
                     mock_powercap_backend(
@@ -365,6 +382,9 @@ class TestPowercapInterfaces:
                     with warns(ZoneFileEmptyWarning, match=backend):
                         discover_power_telemetry_sensors(sys_path)
 
+                @mark.filterwarnings(
+                    'ignore::pytop.backend.cpu.power_telemetry.exceptions.ZoneFileEmptyWarning'
+                )
                 def test_sensor_not_included(
                     self,
                     sys_path: Path,
@@ -373,6 +393,7 @@ class TestPowercapInterfaces:
                     dir_name: str,
                     zone_prefix: str,
                     all_zones: list[PowercapZone],
+                    hwmon_path: Path,
                 ):
                     # ARRANGE
                     mock_powercap_backend(
@@ -399,6 +420,7 @@ class TestPowercapInterfaces:
                     dir_name: str,
                     zone_prefix: str,
                     all_zones: list[PowercapZone],
+                    hwmon_path: Path,
                 ):
                     # ARRANGE
                     mock_powercap_backend(
@@ -414,6 +436,9 @@ class TestPowercapInterfaces:
                     with warns(PowerTelemetrySensorValueWarning):
                         discover_power_telemetry_sensors(sys_path)
 
+                @mark.filterwarnings(
+                    'ignore::pytop.backend.cpu.exceptions.PowerTelemetrySensorValueWarning'
+                )
                 def test_sensor_is_included(
                     self,
                     sys_path: Path,
@@ -422,6 +447,7 @@ class TestPowercapInterfaces:
                     dir_name: str,
                     zone_prefix: str,
                     all_zones: list[PowercapZone],
+                    hwmon_path: Path,
                 ):
                     # ARRANGE
                     mock_powercap_backend(
@@ -449,6 +475,7 @@ class TestPowercapInterfaces:
                     dir_name: str,
                     zone_prefix: str,
                     all_zones: list[PowercapZone],
+                    hwmon_path: Path,
                 ):
                     # ARRANGE
                     mock_powercap_backend(
@@ -464,6 +491,9 @@ class TestPowercapInterfaces:
                     with warns(PowerTelemetrySensorValueWarning):
                         discover_power_telemetry_sensors(sys_path)
 
+                @mark.filterwarnings(
+                    'ignore::pytop.backend.cpu.exceptions.PowerTelemetrySensorValueWarning'
+                )
                 def test_sensor_not_included(
                     self,
                     sys_path: Path,
@@ -472,6 +502,7 @@ class TestPowercapInterfaces:
                     dir_name: str,
                     zone_prefix: str,
                     all_zones: list[PowercapZone],
+                    hwmon_path: Path,
                 ):
                     # ARRANGE
                     mock_powercap_backend(
@@ -498,6 +529,7 @@ class TestPowercapInterfaces:
                     dir_name: str,
                     zone_prefix: str,
                     all_zones: list[PowercapZone],
+                    hwmon_path: Path,
                 ):
                     # ARRANGE
                     mock_powercap_backend(
@@ -513,6 +545,9 @@ class TestPowercapInterfaces:
                     with warns(PowerTelemetrySensorValueWarning):
                         discover_power_telemetry_sensors(sys_path)
 
+                @mark.filterwarnings(
+                    'ignore::pytop.backend.cpu.exceptions.PowerTelemetrySensorValueWarning'
+                )
                 def test_sensor_not_included(
                     self,
                     sys_path: Path,
@@ -521,6 +556,7 @@ class TestPowercapInterfaces:
                     dir_name: str,
                     zone_prefix: str,
                     all_zones: list[PowercapZone],
+                    hwmon_path: Path,
                 ):
                     # ARRANGE
                     mock_powercap_backend(
@@ -547,6 +583,7 @@ class TestPowercapInterfaces:
                     dir_name: str,
                     zone_prefix: str,
                     all_zones: list[PowercapZone],
+                    hwmon_path: Path,
                 ):
                     # ARRANGE
                     mock_powercap_backend(
@@ -560,6 +597,9 @@ class TestPowercapInterfaces:
                     with warns(EnergyUjNotFoundWarning, match=backend):
                         discover_power_telemetry_sensors(sys_path)
 
+                @mark.filterwarnings(
+                    'ignore::pytop.backend.cpu.power_telemetry.exceptions.EnergyUjNotFoundWarning'
+                )
                 def test_sensor_not_included(
                     self,
                     sys_path: Path,
@@ -568,6 +608,7 @@ class TestPowercapInterfaces:
                     dir_name: str,
                     zone_prefix: str,
                     all_zones: list[PowercapZone],
+                    hwmon_path: Path,
                 ):
                     # ARRANGE
                     mock_powercap_backend(
@@ -592,6 +633,7 @@ class TestPowercapInterfaces:
                     dir_name: str,
                     zone_prefix: str,
                     all_zones: list[PowercapZone],
+                    hwmon_path: Path,
                 ):
                     # ARRANGE
                     mock_powercap_backend(
@@ -608,6 +650,9 @@ class TestPowercapInterfaces:
                     with warns(EnergyUjPermissionWarning, match=backend):
                         discover_power_telemetry_sensors(sys_path)
 
+                @mark.filterwarnings(
+                    'ignore::pytop.backend.cpu.power_telemetry.exceptions.EnergyUjPermissionWarning'
+                )
                 def test_sensor_not_included(
                     self,
                     sys_path: Path,
@@ -616,6 +661,7 @@ class TestPowercapInterfaces:
                     dir_name: str,
                     zone_prefix: str,
                     all_zones: list[PowercapZone],
+                    hwmon_path: Path,
                 ):
                     # ARRANGE
                     mock_powercap_backend(
@@ -638,9 +684,12 @@ class TestPowercapInterfaces:
 class TestHwmon:
     """Tests related to the `hwmon` dir search."""
 
-    def test_warns_if_not_found_and_powercap_exists(self, powercap_path: Path):
+    def test_warns_if_not_found_and_powercap_exists(
+        self, powercap_path: Path, mock_powercap_backend: MockPowercapBackend
+    ):
         # ARRANGE
         sys_path = powercap_path.parent.parent
+        mock_powercap_backend('intel-rapl', *some_intel_rapl_zones)
 
         # ASSERT
         with warns(HwmonNotFoundWarning):

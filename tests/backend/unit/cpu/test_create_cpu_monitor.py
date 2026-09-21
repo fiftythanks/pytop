@@ -1,6 +1,6 @@
 import math
 import time
-from collections.abc import Callable, Generator
+from collections.abc import Callable
 from dataclasses import dataclass
 from operator import methodcaller
 from pathlib import Path
@@ -46,25 +46,49 @@ class CommonPaths:
 
 @fixture
 def common_paths(tmp_path: Path) -> CommonPaths:
-    """Return dict of paths to common dirs.
+    """Return a dataclass containing paths to simulated system files.
 
-    The fixture creates a temporary directory, inserts into it `proc/` and
-    `sys/class/powercap/` and returns paths to them, as well as to other common
-    files and directories (without creating them) in a `CommonPaths` dataclass.
+    This fixture creates a temporary directory structure mimicking `/proc` and
+    `/sys`. It populates essential files (`stat`, `cpuinfo`, `loadavg`, `uptime`,
+    and `intel-rapl` energy sensors) with valid template data to ensure that
+    `create_cpu_monitor` can initialize without triggering defensive warnings.
     """
 
     proc_path = tmp_path / 'proc'
     proc_path.mkdir()
 
     proc_stat = proc_path / 'stat'
+    proc_stat.write_text(
+        'cpu  17080480 31047 3621744 155066244 2810089 1482860 594878 0 0 0',
+        encoding='utf-8',
+    )
+
     proc_cpuinfo = proc_path / 'cpuinfo'
+    proc_cpuinfo.write_text(
+        'model name\t: Intel(R) Core(TM) i7-10610U CPU @ 1.80GHz',
+        encoding='utf-8',
+    )
+
     proc_loadavg = proc_path / 'loadavg'
+    proc_loadavg.write_text('1.61 1.71 1.79 2/1455 828173', encoding='utf-8')
+
     proc_uptime = proc_path / 'uptime'
+    proc_uptime.write_text('196440.38 919502.05', encoding='utf-8')
 
     sys_path = tmp_path / 'sys'
     powercap_path = sys_path / 'class' / 'powercap'
     powercap_path.mkdir(parents=True)
+
+    hwmon_path = sys_path / 'class' / 'hwmon'
+    hwmon_path.mkdir()
+
     intel_rapl_path = powercap_path / 'intel-rapl'
+    intel_rapl_path.mkdir()
+
+    default_zone = intel_rapl_path / 'intel-rapl:0'
+    default_zone.mkdir()
+    (default_zone / 'energy_uj').write_text('5000000', encoding='utf-8')
+    (default_zone / 'name').write_text('package-0', encoding='utf-8')
 
     return CommonPaths(
         proc_path,
@@ -101,15 +125,7 @@ class TestGetCpuData:
     """`create_cpu_monitor()` returns a function we will call `get_cpu_stats()` here."""
 
     class TestUptimeSec:
-        def test_is_correct(self, common_paths: CommonPaths):
-            # ARRANGE
-            proc_path = common_paths.proc
-            proc_uptime_path = proc_path / 'uptime'
-            proc_uptime_path.touch()
-            proc_uptime_content = '196440.38 919502.05'
-            proc_uptime_path.write_text(proc_uptime_content)
-            get_cpu_stats = create_cpu_monitor(proc_path)
-
+        def test_is_correct(self, get_cpu_stats: GetCpuStats):
             # ACT
             cpu_stats = get_cpu_stats()
 
@@ -118,30 +134,39 @@ class TestGetCpuData:
 
         class TestParsingErrors:
             class TestNoProcUptime:
-                def test_raises_no_error(self, common_paths: CommonPaths):
+                @mark.filterwarnings(
+                    'ignore::pytop.backend.cpu.exceptions.ProcUptimeFileNotFoundWarning'
+                )
+                def test_raises_no_error(
+                    self, common_paths: CommonPaths, get_cpu_stats: GetCpuStats
+                ):
                     # ARRANGE
-                    proc_path = common_paths.proc
-                    get_cpu_stats = create_cpu_monitor(proc_path)
+                    common_paths.proc_uptime.unlink()
 
                     # ACT
                     get_cpu_stats()
 
-                def test_raises_warning(self, common_paths: CommonPaths):
+                def test_raises_warning(
+                    self, common_paths: CommonPaths, get_cpu_stats: GetCpuStats
+                ):
                     # ARRANG
-                    proc_path = common_paths.proc
-                    get_cpu_stats = create_cpu_monitor(proc_path)
+                    common_paths.proc_uptime.unlink()
 
                     # ASSERT
                     with warns(ProcUptimeFileNotFoundWarning):
                         get_cpu_stats()
 
-                def test_is_none(self, common_paths: CommonPaths):
+                @mark.filterwarnings(
+                    'ignore::pytop.backend.cpu.exceptions.ProcUptimeFileNotFoundWarning'
+                )
+                def test_is_none(
+                    self, common_paths: CommonPaths, get_cpu_stats: GetCpuStats
+                ):
                     """If no `/proc/uptime` found in the filesystem, then the
                     uptime must fall back to `None`."""
 
                     # ARRANGE
-                    proc_path = common_paths.proc
-                    get_cpu_stats = create_cpu_monitor(proc_path)
+                    common_paths.proc_uptime.unlink()
 
                     # ACT
                     cpu_stats = get_cpu_stats()
@@ -153,35 +178,28 @@ class TestGetCpuData:
                 proc_uptime_path: Path | None = None
 
                 @fixture(autouse=True)
-                def create_proc_uptime(
-                    self, common_paths: CommonPaths
-                ) -> Generator[None]:
-                    self.proc_uptime_path = common_paths.proc / 'uptime'
-                    self.proc_uptime_path.touch(0o000, False)
+                def restrict_proc_uptime(self, common_paths: CommonPaths):
+                    common_paths.proc_uptime.chmod(0o000)
 
-                    yield
-
-                    self.proc_uptime_path = None
-
-                def test_raises_no_error(self, common_paths: CommonPaths):
-                    # ARRANGE
-                    get_cpu_stats = create_cpu_monitor(common_paths.proc)
-
-                    # ACT
+                @mark.filterwarnings(
+                    'ignore::pytop.backend.cpu.power_telemetry.exceptions.EnergyUjPermissionWarning',
+                    'ignore::pytop.backend.cpu.exceptions.ProcUptimePermissionWarning',
+                )
+                def test_raises_no_error(self, get_cpu_stats: GetCpuStats):
                     get_cpu_stats()
 
-                def test_raises_warning(self, common_paths: CommonPaths):
-                    # ARRANGE
-                    get_cpu_stats = create_cpu_monitor(common_paths.proc)
-
-                    # ASSERT
+                @mark.filterwarnings(
+                    'ignore::pytop.backend.cpu.power_telemetry.exceptions.EnergyUjPermissionWarning'
+                )
+                def test_raises_warning(self, get_cpu_stats: GetCpuStats):
                     with warns(ProcUptimePermissionWarning):
                         get_cpu_stats()
 
-                def test_falls_back_to_none(self, common_paths: CommonPaths):
-                    # ARRANGE
-                    get_cpu_stats = create_cpu_monitor(common_paths.proc)
-
+                @mark.filterwarnings(
+                    'ignore::pytop.backend.cpu.power_telemetry.exceptions.EnergyUjPermissionWarning',
+                    'ignore::pytop.backend.cpu.exceptions.ProcUptimePermissionWarning',
+                )
+                def test_falls_back_to_none(self, get_cpu_stats: GetCpuStats):
                     # ACT
                     cpu_stats = get_cpu_stats()
 
@@ -192,36 +210,23 @@ class TestGetCpuData:
                 proc_uptime_path: Path | None = None
 
                 @fixture(autouse=True)
-                def create_proc_uptime(
-                    self, common_paths: CommonPaths
-                ) -> Generator[None]:
-                    self.proc_uptime_path = common_paths.proc / 'uptime'
-                    self.proc_uptime_path.touch()
-                    self.proc_uptime_path.write_text('incorrect content')
+                def corrupt_proc_uptime(self, common_paths: CommonPaths):
+                    common_paths.proc_uptime.write_text('incorrect content')
 
-                    yield
-
-                    self.proc_uptime_path = None
-
-                def test_raises_no_error(self, common_paths: CommonPaths):
-                    # ARRANGE
-                    get_cpu_stats = create_cpu_monitor(common_paths.proc)
-
-                    # ACT
+                @mark.filterwarnings(
+                    'ignore::pytop.backend.cpu.exceptions.ProcUptimeValueWarning'
+                )
+                def test_raises_no_error(self, get_cpu_stats: GetCpuStats):
                     get_cpu_stats()
 
-                def test_raises_warning(self, common_paths: CommonPaths):
-                    # ARRANGE
-                    get_cpu_stats = create_cpu_monitor(common_paths.proc)
-
-                    # ASSERT
+                def test_raises_warning(self, get_cpu_stats: GetCpuStats):
                     with warns(ProcUptimeValueWarning):
                         get_cpu_stats()
 
-                def test_falls_back_to_none(self, common_paths: CommonPaths):
-                    # ARRANGE
-                    get_cpu_stats = create_cpu_monitor(common_paths.proc)
-
+                @mark.filterwarnings(
+                    'ignore::pytop.backend.cpu.exceptions.ProcUptimeValueWarning'
+                )
+                def test_falls_back_to_none(self, get_cpu_stats: GetCpuStats):
                     # ACT
                     cpu_stats = get_cpu_stats()
 
@@ -232,36 +237,23 @@ class TestGetCpuData:
                 proc_uptime_path: Path | None = None
 
                 @fixture(autouse=True)
-                def create_proc_uptime(
-                    self, common_paths: CommonPaths
-                ) -> Generator[None]:
-                    self.proc_uptime_path = common_paths.proc / 'uptime'
-                    self.proc_uptime_path.touch()
-                    self.proc_uptime_path.write_text('')
+                def empty_proc_uptime(self, common_paths: CommonPaths):
+                    common_paths.proc_uptime.write_text('')
 
-                    yield
-
-                    self.proc_uptime_path = None
-
-                def test_raises_no_error(self, common_paths: CommonPaths):
-                    # ARRANGE
-                    get_cpu_stats = create_cpu_monitor(common_paths.proc)
-
-                    # ACT
+                @mark.filterwarnings(
+                    'ignore::pytop.backend.cpu.exceptions.ProcUptimeIndexWarning'
+                )
+                def test_raises_no_error(self, get_cpu_stats: GetCpuStats):
                     get_cpu_stats()
 
-                def test_raises_warning(self, common_paths: CommonPaths):
-                    # ARRANGE
-                    get_cpu_stats = create_cpu_monitor(common_paths.proc)
-
-                    # ASSERT
+                def test_raises_warning(self, get_cpu_stats: GetCpuStats):
                     with warns(ProcUptimeIndexWarning):
                         get_cpu_stats()
 
-                def test_falls_back_to_none(self, common_paths: CommonPaths):
-                    # ARRANGE
-                    get_cpu_stats = create_cpu_monitor(common_paths.proc)
-
+                @mark.filterwarnings(
+                    'ignore::pytop.backend.cpu.exceptions.ProcUptimeIndexWarning'
+                )
+                def test_falls_back_to_none(self, get_cpu_stats: GetCpuStats):
                     # ACT
                     cpu_stats = get_cpu_stats()
 
@@ -269,25 +261,7 @@ class TestGetCpuData:
                     assert cpu_stats.uptime_sec is None
 
     class TestName:
-        def test_is_correct(self, common_paths: CommonPaths):
-            # ARRANGE
-            proc_path = common_paths.proc
-            proc_cpuinfo_path = proc_path / 'cpuinfo'
-            proc_cpuinfo_path.touch()
-            proc_cpuinfo_content = (
-                'processor\t: 0\n'
-                'vendor_id\t: GenuineIntel\n'
-                'cpu family\t: 6\n'
-                'model\t\t: 142\n'
-                'model name\t: Intel(R) Core(TM) i7-10610U CPU @ 1.80GHz\n'
-                'stepping\t: 12\n'
-                'microcode\t: 0xca\n'
-                'cpu MHz\t\t: 800.000\n'
-                'cache size\t: 8192 KB\n'
-            )
-            proc_cpuinfo_path.write_text(proc_cpuinfo_content)
-            get_cpu_stats = create_cpu_monitor(proc_path)
-
+        def test_is_correct(self, get_cpu_stats: GetCpuStats):
             # ACT
             cpu_stats = get_cpu_stats()
 
@@ -296,27 +270,36 @@ class TestGetCpuData:
 
         class TestParsingErrors:
             class TestNoProcCpuinfo:
-                def test_raises_no_error(self, common_paths: CommonPaths):
+                @mark.filterwarnings(
+                    'ignore::pytop.backend.cpu.exceptions.ProcCpuinfoFileNotFoundWarning'
+                )
+                def test_raises_no_error(
+                    self, common_paths: CommonPaths, get_cpu_stats: GetCpuStats
+                ):
                     # ARRANGE
-                    proc_path = common_paths.proc
-                    get_cpu_stats = create_cpu_monitor(proc_path)
+                    common_paths.proc_cpuinfo.unlink()
 
                     # ACT
                     get_cpu_stats()
 
-                def test_raises_warning(self, common_paths: CommonPaths):
+                def test_raises_warning(
+                    self, common_paths: CommonPaths, get_cpu_stats: GetCpuStats
+                ):
                     # ARRANGE
-                    proc_path = common_paths.proc
-                    get_cpu_stats = create_cpu_monitor(proc_path)
+                    common_paths.proc_cpuinfo.unlink()
 
                     # ASSERT
                     with warns(ProcCpuinfoFileNotFoundWarning):
                         get_cpu_stats()
 
-                def test_falls_back_to_none(self, common_paths: CommonPaths):
+                @mark.filterwarnings(
+                    'ignore::pytop.backend.cpu.exceptions.ProcCpuinfoFileNotFoundWarning'
+                )
+                def test_falls_back_to_none(
+                    self, common_paths: CommonPaths, get_cpu_stats: GetCpuStats
+                ):
                     # ARRANGE
-                    proc_path = common_paths.proc
-                    get_cpu_stats = create_cpu_monitor(proc_path)
+                    common_paths.proc_cpuinfo.unlink()
 
                     # ACT
                     cpu_stats = get_cpu_stats()
@@ -325,30 +308,36 @@ class TestGetCpuData:
                     assert cpu_stats.name is None
 
             class TestPermissionError:
-                def test_raises_no_error(self, common_paths: CommonPaths):
+                @mark.filterwarnings(
+                    'ignore::pytop.backend.cpu.exceptions.ProcCpuinfoPermissionWarning'
+                )
+                def test_raises_no_error(
+                    self, common_paths: CommonPaths, get_cpu_stats: GetCpuStats
+                ):
                     # ARRANGE
-                    proc_path = common_paths.proc
-                    common_paths.proc_cpuinfo.touch(0o000, False)
-                    get_cpu_stats = create_cpu_monitor(proc_path)
+                    common_paths.proc_cpuinfo.chmod(0o000)
 
                     # ACT
                     get_cpu_stats()
 
-                def test_raises_warning(self, common_paths: CommonPaths):
+                def test_raises_warning(
+                    self, common_paths: CommonPaths, get_cpu_stats: GetCpuStats
+                ):
                     # ARRANGE
-                    proc_path = common_paths.proc
-                    common_paths.proc_cpuinfo.touch(0o000, False)
-                    get_cpu_stats = create_cpu_monitor(proc_path)
+                    common_paths.proc_cpuinfo.chmod(0o000)
 
                     # ASSERT
                     with warns(ProcCpuinfoPermissionWarning):
                         get_cpu_stats()
 
-                def test_falls_back_to_none(self, common_paths: CommonPaths):
+                @mark.filterwarnings(
+                    'ignore::pytop.backend.cpu.exceptions.ProcCpuinfoPermissionWarning'
+                )
+                def test_falls_back_to_none(
+                    self, common_paths: CommonPaths, get_cpu_stats: GetCpuStats
+                ):
                     # ARRANGE
-                    proc_path = common_paths.proc
-                    common_paths.proc_cpuinfo.touch(0o000, False)
-                    get_cpu_stats = create_cpu_monitor(proc_path)
+                    common_paths.proc_cpuinfo.chmod(0o000)
 
                     # ACT
                     cpu_stats = get_cpu_stats()
@@ -357,33 +346,36 @@ class TestGetCpuData:
                     assert cpu_stats.name is None
 
             class TestIndexError:
-                def test_raises_no_error(self, common_paths: CommonPaths):
+                @mark.filterwarnings(
+                    'ignore::pytop.backend.cpu.exceptions.ProcCpuinfoIndexWarning'
+                )
+                def test_raises_no_error(
+                    self, common_paths: CommonPaths, get_cpu_stats: GetCpuStats
+                ):
                     # ARRANGE
-                    proc_path = common_paths.proc
-                    common_paths.proc_cpuinfo.touch()
                     common_paths.proc_cpuinfo.write_text('model name')
-                    get_cpu_stats = create_cpu_monitor(proc_path)
 
                     # ACT
                     get_cpu_stats()
 
-                def test_raises_warning(self, common_paths: CommonPaths):
+                def test_raises_warning(
+                    self, common_paths: CommonPaths, get_cpu_stats: GetCpuStats
+                ):
                     # ARRANGE
-                    proc_path = common_paths.proc
-                    common_paths.proc_cpuinfo.touch()
                     common_paths.proc_cpuinfo.write_text('model name')
-                    get_cpu_stats = create_cpu_monitor(proc_path)
 
                     # ASSERT
                     with warns(ProcCpuinfoIndexWarning):
                         get_cpu_stats()
 
-                def test_falls_back_to_none(self, common_paths: CommonPaths):
+                @mark.filterwarnings(
+                    'ignore::pytop.backend.cpu.exceptions.ProcCpuinfoIndexWarning'
+                )
+                def test_falls_back_to_none(
+                    self, common_paths: CommonPaths, get_cpu_stats: GetCpuStats
+                ):
                     # ARRANGE
-                    proc_path = common_paths.proc
-                    common_paths.proc_cpuinfo.touch()
                     common_paths.proc_cpuinfo.write_text('model name')
-                    get_cpu_stats = create_cpu_monitor(proc_path)
 
                     # ACT
                     cpu_stats = get_cpu_stats()
@@ -392,278 +384,208 @@ class TestGetCpuData:
                     assert cpu_stats.name is None
 
     class TestUsagePercent:
-        def test_is_none_on_first_call(self, common_paths: CommonPaths):
-            # ARRANGE
-            proc_path = common_paths.proc
-            proc_stat_path = proc_path / 'stat'
-            proc_stat_path.touch()
-            proc_stat_content = 'cpu\t17080480 31047 3621744 155066244 2810089 1482860 594878 0 0 0'
-            proc_stat_path.write_text(proc_stat_content)
-            get_cpu_stats = create_cpu_monitor(proc_path)
-
+        def test_is_none_on_first_call(self, get_cpu_stats: GetCpuStats):
             # ACT
             cpu_stats = get_cpu_stats()
 
             # ASSERT
             assert cpu_stats.usage_percent is None
 
-        def test_is_correct_on_second_call(self, common_paths: CommonPaths):
-            """By definition, the second call happens a second later after the first
-            call."""
-
-            # ARRANGE
-            proc_path = common_paths.proc
-            proc_stat_path = proc_path / 'stat'
-            proc_stat_path.touch()
-            proc_stat_content_initial = 'cpu  17080480 31047 3621744 155066244 2810089 1482860 594878 0 0 0'
-            proc_stat_path.write_text(proc_stat_content_initial)
-            get_cpu_stats = create_cpu_monitor(proc_path)
-
+        def test_is_correct_on_second_call(
+            self, common_paths: CommonPaths, get_cpu_stats: GetCpuStats
+        ):
             # ACT
-            cpu_stats_1 = get_cpu_stats()
-
-            proc_stat_content_a_second_later = 'cpu  17080558 31047 3621744 155066266 2810089 1482860 594878 0 0 0'
-            proc_stat_path.write_text(proc_stat_content_a_second_later)
+            get_cpu_stats()
+            common_paths.proc_stat.write_text(
+                'cpu  17080558 31047 3621744 155066266 2810089 1482860 594878 0 0 0'
+            )
             cpu_stats_2 = get_cpu_stats()
 
             # ASSERT
-            assert cpu_stats_1.usage_percent is None
             assert cpu_stats_2.usage_percent is not None
             assert math.isclose(cpu_stats_2.usage_percent, 78)
 
-        def test_is_correct_on_third_call(self, common_paths: CommonPaths):
-            # ARRANGE
-            proc_path = common_paths.proc
-            proc_stat_path = proc_path / 'stat'
-            proc_stat_path.touch()
-            proc_stat_content_initial = 'cpu  17080480 31047 3621744 155066244 2810089 1482860 594878 0 0 0'
-            proc_stat_path.write_text(proc_stat_content_initial)
-            get_cpu_stats = create_cpu_monitor(proc_path)
-
+        def test_is_correct_on_third_call(
+            self, common_paths: CommonPaths, get_cpu_stats: GetCpuStats
+        ):
             # ACT
-            cpu_stats_1 = get_cpu_stats()
-
-            proc_stat_content_a_second_later = 'cpu  17080558 31047 3621744 155066266 2810089 1482860 594878 0 0 0'
-            proc_stat_path.write_text(proc_stat_content_a_second_later)
-            cpu_stats_2 = get_cpu_stats()
-
-            proc_stat_content_another_second_later = 'cpu  17080636 31047 3621744 155066288 2810089 1482860 594878 0 0 0'
-            proc_stat_path.write_text(proc_stat_content_another_second_later)
+            get_cpu_stats()
+            common_paths.proc_stat.write_text(
+                'cpu  17080558 31047 3621744 155066266 2810089 1482860 594878 0 0 0'
+            )
+            get_cpu_stats()
+            common_paths.proc_stat.write_text(
+                'cpu  17080636 31047 3621744 155066288 2810089 1482860 594878 0 0 0'
+            )
             cpu_stats_3 = get_cpu_stats()
 
             # ASSERT
-            assert cpu_stats_1.usage_percent is None
-            assert cpu_stats_2.usage_percent is not None
-            assert math.isclose(cpu_stats_2.usage_percent, 78)
             assert cpu_stats_3.usage_percent is not None
             assert math.isclose(cpu_stats_3.usage_percent, 78)
 
         class TestParsingErrors:
             class TestNoProcStatPath:
-                def test_raises_no_error(self, common_paths: CommonPaths):
+                @mark.filterwarnings(
+                    'ignore::pytop.backend.cpu.exceptions.ProcStatFileNotFoundWarning'
+                )
+                def test_raises_no_error(
+                    self, common_paths: CommonPaths, get_cpu_stats: GetCpuStats
+                ):
                     # ARRANGE
-                    proc_path = common_paths.proc
-                    get_cpu_stats = create_cpu_monitor(proc_path)
+                    common_paths.proc_stat.unlink()
 
                     # ACT
                     get_cpu_stats()
-                    get_cpu_stats()
-                    get_cpu_stats()
 
-                def test_raises_warning(self, common_paths: CommonPaths):
+                def test_raises_warning(
+                    self, common_paths: CommonPaths, get_cpu_stats: GetCpuStats
+                ):
                     # ARRANGE
-                    get_cpu_stats = create_cpu_monitor(common_paths.proc)
+                    common_paths.proc_stat.unlink()
 
                     # ASSERT
                     with warns(ProcStatFileNotFoundWarning):
                         get_cpu_stats()
 
-                def test_falls_back_to_none(self, common_paths: CommonPaths):
+                @mark.filterwarnings(
+                    'ignore::pytop.backend.cpu.exceptions.ProcStatFileNotFoundWarning'
+                )
+                def test_falls_back_to_none(
+                    self, common_paths: CommonPaths, get_cpu_stats: GetCpuStats
+                ):
                     # ARRANGE
-                    proc_path = common_paths.proc
-                    get_cpu_stats = create_cpu_monitor(proc_path)
+                    common_paths.proc_stat.unlink()
 
                     # ACT
-                    cpu_stats_1 = get_cpu_stats()
-                    cpu_stats_2 = get_cpu_stats()
-                    cpu_stats_3 = get_cpu_stats()
+                    cpu_stats = get_cpu_stats()
 
                     # ASSERT
-                    assert cpu_stats_1.usage_percent is None
-                    assert cpu_stats_2.usage_percent is None
-                    assert cpu_stats_3.usage_percent is None
+                    assert cpu_stats.usage_percent is None
 
             class TestPermissionError:
-                def test_raises_no_error(self, common_paths: CommonPaths):
+                @mark.filterwarnings(
+                    'ignore::pytop.backend.cpu.exceptions.ProcStatPermissionWarning'
+                )
+                def test_raises_no_error(
+                    self, common_paths: CommonPaths, get_cpu_stats: GetCpuStats
+                ):
                     # ARRANGE
-                    proc_path = common_paths.proc
-                    common_paths.proc_stat.touch(0o000, False)
-                    get_cpu_stats = create_cpu_monitor(proc_path)
+                    common_paths.proc_stat.chmod(0o000)
 
                     # ACT
                     get_cpu_stats()
-                    get_cpu_stats()
-                    get_cpu_stats()
 
-                def test_raises_warning(self, common_paths: CommonPaths):
+                def test_raises_warning(
+                    self, common_paths: CommonPaths, get_cpu_stats: GetCpuStats
+                ):
                     # ARRANGE
-                    proc_path = common_paths.proc
-                    common_paths.proc_stat.touch(0o000, False)
-                    get_cpu_stats = create_cpu_monitor(proc_path)
+                    common_paths.proc_stat.chmod(0o000)
 
                     # ASSERT
                     with warns(ProcStatPermissionWarning):
                         get_cpu_stats()
 
-                def test_falls_back_to_none(self, common_paths: CommonPaths):
+                @mark.filterwarnings(
+                    'ignore::pytop.backend.cpu.exceptions.ProcStatPermissionWarning'
+                )
+                def test_falls_back_to_none(
+                    self, common_paths: CommonPaths, get_cpu_stats: GetCpuStats
+                ):
                     # ARRANGE
-                    proc_path = common_paths.proc
-                    common_paths.proc_stat.touch(0o000, False)
-                    get_cpu_stats = create_cpu_monitor(proc_path)
+                    common_paths.proc_stat.chmod(0o000)
 
                     # ACT
-                    cpu_stats_1 = get_cpu_stats()
-                    cpu_stats_2 = get_cpu_stats()
-                    cpu_stats_3 = get_cpu_stats()
+                    cpu_stats = get_cpu_stats()
 
                     # ASSERT
-                    assert cpu_stats_1.usage_percent is None
-                    assert cpu_stats_2.usage_percent is None
-                    assert cpu_stats_3.usage_percent is None
+                    assert cpu_stats.usage_percent is None
 
             class TestValueError:
-                def test_raises_no_error(self, common_paths: CommonPaths):
-                    # ARRANGE
-                    proc_path = common_paths.proc
-                    common_paths.proc_stat.touch()
-                    proc_stat_content = 'cpu  17080480 31047 3621744 155066244 2810089 1482860 594878 0 0 0'
-                    common_paths.proc_stat.write_text(proc_stat_content)
-                    get_cpu_stats = create_cpu_monitor(proc_path)
-
+                @mark.filterwarnings(
+                    'ignore::pytop.backend.cpu.exceptions.ProcStatValueWarning'
+                )
+                def test_raises_no_error(
+                    self, common_paths: CommonPaths, get_cpu_stats: GetCpuStats
+                ):
                     # ACT
                     get_cpu_stats()
-                    proc_stat_content_wrong = 'cpu incorrect content'
-                    common_paths.proc_stat.write_text(proc_stat_content_wrong)
-                    get_cpu_stats()
+                    common_paths.proc_stat.write_text('cpu incorrect content')
                     get_cpu_stats()
 
-                def test_raises_warning(self, common_paths: CommonPaths):
-                    # ARRANGE
-                    proc_path = common_paths.proc
-                    common_paths.proc_stat.touch()
-                    proc_stat_content = 'cpu  17080480 31047 3621744 155066244 2810089 1482860 594878 0 0 0'
-                    common_paths.proc_stat.write_text(proc_stat_content)
-                    get_cpu_stats = create_cpu_monitor(proc_path)
-
+                def test_raises_warning(
+                    self, common_paths: CommonPaths, get_cpu_stats: GetCpuStats
+                ):
                     # ACT
                     get_cpu_stats()
-                    proc_stat_content_wrong = 'cpu incorrect content'
-                    common_paths.proc_stat.write_text(proc_stat_content_wrong)
+                    common_paths.proc_stat.write_text('cpu incorrect content')
 
                     # ASSERT
                     with warns(ProcStatValueWarning):
                         get_cpu_stats()
 
-                def test_falls_back_to_none(self, common_paths: CommonPaths):
-                    # ARRANGE
-                    proc_path = common_paths.proc
-                    common_paths.proc_stat.touch()
-                    proc_stat_content = 'cpu  17080480 31047 3621744 155066244 2810089 1482860 594878 0 0 0'
-                    common_paths.proc_stat.write_text(proc_stat_content)
-                    get_cpu_stats = create_cpu_monitor(proc_path)
-
+                @mark.filterwarnings(
+                    'ignore::pytop.backend.cpu.exceptions.ProcStatValueWarning'
+                )
+                def test_falls_back_to_none(
+                    self, common_paths: CommonPaths, get_cpu_stats: GetCpuStats
+                ):
                     # ACT
                     get_cpu_stats()
-                    proc_stat_content_wrong = 'cpu incorrect content'
-                    common_paths.proc_stat.write_text(proc_stat_content_wrong)
-                    cpu_stats_2 = get_cpu_stats()
-                    cpu_stats_3 = get_cpu_stats()
+                    common_paths.proc_stat.write_text('cpu incorrect content')
+                    cpu_stats = get_cpu_stats()
 
                     # ASSERT
-                    assert cpu_stats_2.usage_percent is None
-                    assert cpu_stats_3.usage_percent is None
+                    assert cpu_stats.usage_percent is None
 
             class TestIndexError:
-                def test_raises_no_error(self, common_paths: CommonPaths):
-                    # ARRANGE
-                    proc_path = common_paths.proc
-                    common_paths.proc_stat.touch()
-                    proc_stat_content = 'cpu  17080480 31047 3621744 155066244 2810089 1482860 594878 0 0 0'
-                    common_paths.proc_stat.write_text(proc_stat_content)
-                    get_cpu_stats = create_cpu_monitor(proc_path)
-
+                @mark.filterwarnings(
+                    'ignore::pytop.backend.cpu.exceptions.ProcStatIndexWarning'
+                )
+                def test_raises_no_error(
+                    self, common_paths: CommonPaths, get_cpu_stats: GetCpuStats
+                ):
                     # ACT
                     get_cpu_stats()
-                    proc_stat_content_wrong = 'cpu'
-                    common_paths.proc_stat.write_text(proc_stat_content_wrong)
-                    get_cpu_stats()
+                    common_paths.proc_stat.write_text('cpu')
                     get_cpu_stats()
 
-                def test_raises_warning(self, common_paths: CommonPaths):
-                    # ARRANGE
-                    proc_path = common_paths.proc
-                    common_paths.proc_stat.touch()
-                    proc_stat_content = 'cpu  17080480 31047 3621744 155066244 2810089 1482860 594878 0 0 0'
-                    common_paths.proc_stat.write_text(proc_stat_content)
-                    get_cpu_stats = create_cpu_monitor(proc_path)
-
+                def test_raises_warning(
+                    self, common_paths: CommonPaths, get_cpu_stats: GetCpuStats
+                ):
                     # ACT
                     get_cpu_stats()
-                    proc_stat_content_wrong = 'cpu'
-                    common_paths.proc_stat.write_text(proc_stat_content_wrong)
+                    common_paths.proc_stat.write_text('cpu')
 
                     # ASSERT
                     with warns(ProcStatIndexWarning):
                         get_cpu_stats()
 
-                def test_falls_back_to_none(self, common_paths: CommonPaths):
-                    # ARRANGE
-                    proc_path = common_paths.proc
-                    common_paths.proc_stat.touch()
-                    proc_stat_content = 'cpu  17080480 31047 3621744 155066244 2810089 1482860 594878 0 0 0'
-                    common_paths.proc_stat.write_text(proc_stat_content)
-                    get_cpu_stats = create_cpu_monitor(proc_path)
-
+                @mark.filterwarnings(
+                    'ignore::pytop.backend.cpu.exceptions.ProcStatIndexWarning'
+                )
+                def test_falls_back_to_none(
+                    self, common_paths: CommonPaths, get_cpu_stats: GetCpuStats
+                ):
                     # ACT
                     get_cpu_stats()
-                    proc_stat_content_wrong = 'cpu'
-                    common_paths.proc_stat.write_text(proc_stat_content_wrong)
-                    cpu_stats_2 = get_cpu_stats()
-                    cpu_stats_3 = get_cpu_stats()
+                    common_paths.proc_stat.write_text('cpu')
+                    cpu_stats = get_cpu_stats()
 
                     # ASSERT
-                    assert cpu_stats_2.usage_percent is None
-                    assert cpu_stats_3.usage_percent is None
+                    assert cpu_stats.usage_percent is None
 
     class TestLoadAverage:
-        load_avg_1min = 1.61
-        load_avg_5min = 1.71
-        load_avg_15min = 1.79
-        proc_loadavg_content = (
-            f'{load_avg_1min} {load_avg_5min} {load_avg_15min} 2/1455 828173'
-        )
-
-        def initialise(self, common_paths: CommonPaths):
-            proc_path = common_paths.proc
-            proc_loadavg_path = proc_path / 'loadavg'
-            proc_loadavg_path.touch()
-            proc_loadavg_path.write_text(self.proc_loadavg_content)
-
         @mark.parametrize(
             ['type', 'correct_value'],
             [
-                ('load_avg_1min', load_avg_1min),
-                ('load_avg_5min', load_avg_5min),
-                ('load_avg_15min', load_avg_15min),
+                ('load_avg_1min', 1.61),
+                ('load_avg_5min', 1.71),
+                ('load_avg_15min', 1.79),
             ],
         )
         def test_is_correct(
-            self, common_paths: CommonPaths, type: str, correct_value: float
+            self, get_cpu_stats: GetCpuStats, type: str, correct_value: float
         ):
-            # ARRANGE
-            self.initialise(common_paths)
-            get_cpu_stats = create_cpu_monitor(common_paths.proc)
-
             # ACT
             cpu_stats = get_cpu_stats()
 
@@ -675,9 +597,18 @@ class TestGetCpuData:
         class TestParsingErrors:
             class TestNoProcLoadavg:
                 @mark.parametrize('type', load_avg_types)
+                @mark.filterwarnings(
+                    'ignore::pytop.backend.cpu.exceptions.ProcLoadavgFileNotFoundWarning'
+                )
                 def test_falls_back_to_none(
-                    self, type: str, get_cpu_stats: GetCpuStats
+                    self,
+                    type: str,
+                    common_paths: CommonPaths,
+                    get_cpu_stats: GetCpuStats,
                 ):
+                    # ARRANGE
+                    common_paths.proc_loadvg.unlink()
+
                     # ACT
                     cpu_stats = get_cpu_stats()
 
@@ -686,35 +617,49 @@ class TestGetCpuData:
                     assert value is None
 
                 @mark.parametrize('type', load_avg_types)
+                @mark.filterwarnings(
+                    'ignore::pytop.backend.cpu.exceptions.ProcLoadavgFileNotFoundWarning'
+                )
                 def test_raises_no_error(
-                    self, type: str, get_cpu_stats: GetCpuStats
+                    self,
+                    type: str,
+                    common_paths: CommonPaths,
+                    get_cpu_stats: GetCpuStats,
                 ):
+                    # ARRANGE
+                    common_paths.proc_loadvg.unlink()
+
                     # ACT
                     get_cpu_stats()
 
                 @mark.parametrize('type', load_avg_types)
                 def test_raises_warning(
-                    self, type: str, get_cpu_stats: GetCpuStats
+                    self,
+                    type: str,
+                    common_paths: CommonPaths,
+                    get_cpu_stats: GetCpuStats,
                 ):
+                    # ARRANGE
+                    common_paths.proc_loadvg.unlink()
+
                     # ASSERT
                     with warns(ProcLoadavgFileNotFoundWarning):
                         get_cpu_stats()
 
             class TestPermissionError:
-                @fixture
-                def get_cpu_stats(
-                    self, common_paths: CommonPaths
-                ) -> GetCpuStats:
-                    common_paths.proc_loadvg.touch(0o000, False)
-                    return create_cpu_monitor(common_paths.proc)
-
                 @mark.parametrize('type', load_avg_types)
+                @mark.filterwarnings(
+                    'ignore::pytop.backend.cpu.exceptions.ProcLoadavgPermissionWarning'
+                )
                 def test_raises_no_error(
                     self,
                     type: str,
-                    get_cpu_stats: GetCpuStats,
                     common_paths: CommonPaths,
+                    get_cpu_stats: GetCpuStats,
                 ):
+                    # ARRANGE
+                    common_paths.proc_loadvg.chmod(0o000)
+
                     # ACT
                     get_cpu_stats()
 
@@ -722,20 +667,29 @@ class TestGetCpuData:
                 def test_raises_warning(
                     self,
                     type: str,
-                    get_cpu_stats: GetCpuStats,
                     common_paths: CommonPaths,
+                    get_cpu_stats: GetCpuStats,
                 ):
+                    # ARRANGE
+                    common_paths.proc_loadvg.chmod(0o000)
+
                     # ASSERT
                     with warns(ProcLoadavgPermissionWarning):
                         get_cpu_stats()
 
                 @mark.parametrize('type', load_avg_types)
+                @mark.filterwarnings(
+                    'ignore::pytop.backend.cpu.exceptions.ProcLoadavgPermissionWarning'
+                )
                 def test_falls_back_to_none(
                     self,
                     type: str,
-                    get_cpu_stats: GetCpuStats,
                     common_paths: CommonPaths,
+                    get_cpu_stats: GetCpuStats,
                 ):
+                    # ARRANGE
+                    common_paths.proc_loadvg.chmod(0o000)
+
                     # ACT
                     cpu_stats = get_cpu_stats()
 
@@ -744,33 +698,49 @@ class TestGetCpuData:
                     assert value is None
 
             class TestValueError:
-                @fixture
-                def get_cpu_stats(
-                    self, common_paths: CommonPaths
-                ) -> GetCpuStats:
-                    common_paths.proc_loadvg.touch()
-                    common_paths.proc_loadvg.write_text('incorrect content')
-                    return create_cpu_monitor(common_paths.proc)
-
                 @mark.parametrize('type', load_avg_types)
+                @mark.filterwarnings(
+                    'ignore::pytop.backend.cpu.exceptions.ProcLoadavgValueWarning'
+                )
                 def test_raises_no_error(
-                    self, type: str, get_cpu_stats: GetCpuStats
+                    self,
+                    type: str,
+                    common_paths: CommonPaths,
+                    get_cpu_stats: GetCpuStats,
                 ):
+                    # ARRANGE
+                    common_paths.proc_loadvg.write_text('incorrect content')
+
                     # ACT
                     get_cpu_stats()
 
                 @mark.parametrize('type', load_avg_types)
                 def test_raises_warning(
-                    self, type: str, get_cpu_stats: GetCpuStats
+                    self,
+                    type: str,
+                    common_paths: CommonPaths,
+                    get_cpu_stats: GetCpuStats,
                 ):
+                    # ARRANGE
+                    common_paths.proc_loadvg.write_text('incorrect content')
+
                     # ASSERT
                     with warns(ProcLoadavgValueWarning):
                         get_cpu_stats()
 
                 @mark.parametrize('type', load_avg_types)
+                @mark.filterwarnings(
+                    'ignore::pytop.backend.cpu.exceptions.ProcLoadavgValueWarning'
+                )
                 def test_falls_back_to_none(
-                    self, type: str, get_cpu_stats: GetCpuStats
+                    self,
+                    type: str,
+                    common_paths: CommonPaths,
+                    get_cpu_stats: GetCpuStats,
                 ):
+                    # ARRANGE
+                    common_paths.proc_loadvg.write_text('incorrect content')
+
                     # ACT
                     cpu_stats = get_cpu_stats()
 
@@ -779,33 +749,49 @@ class TestGetCpuData:
                     assert value is None
 
             class TestIndexError:
-                @fixture
-                def get_cpu_stats(
-                    self, common_paths: CommonPaths
-                ) -> GetCpuStats:
-                    common_paths.proc_loadvg.touch()
-                    common_paths.proc_loadvg.write_text('')
-                    return create_cpu_monitor(common_paths.proc)
-
                 @mark.parametrize('type', load_avg_types)
+                @mark.filterwarnings(
+                    'ignore::pytop.backend.cpu.exceptions.ProcLoadavgIndexWarning'
+                )
                 def test_raises_no_error(
-                    self, type: str, get_cpu_stats: GetCpuStats
+                    self,
+                    type: str,
+                    common_paths: CommonPaths,
+                    get_cpu_stats: GetCpuStats,
                 ):
+                    # ARRANGE
+                    common_paths.proc_loadvg.write_text('')
+
                     # ACT
                     get_cpu_stats()
 
                 @mark.parametrize('type', load_avg_types)
                 def test_raises_warning(
-                    self, type: str, get_cpu_stats: GetCpuStats
+                    self,
+                    type: str,
+                    common_paths: CommonPaths,
+                    get_cpu_stats: GetCpuStats,
                 ):
+                    # ARRANGE
+                    common_paths.proc_loadvg.write_text('')
+
                     # ASSERT
                     with warns(ProcLoadavgIndexWarning):
                         get_cpu_stats()
 
                 @mark.parametrize('type', load_avg_types)
+                @mark.filterwarnings(
+                    'ignore::pytop.backend.cpu.exceptions.ProcLoadavgIndexWarning'
+                )
                 def test_falls_back_to_none(
-                    self, type: str, get_cpu_stats: GetCpuStats
+                    self,
+                    type: str,
+                    common_paths: CommonPaths,
+                    get_cpu_stats: GetCpuStats,
                 ):
+                    # ARRANGE
+                    common_paths.proc_loadvg.write_text('')
+
                     # ACT
                     cpu_stats = get_cpu_stats()
 
@@ -815,34 +801,27 @@ class TestGetCpuData:
 
     class TestPowerConsumptionWatt:
         def test_outputs_correct_values(
-            self, common_paths: CommonPaths, monkeypatch: MonkeyPatch
+            self, common_paths: CommonPaths, get_cpu_stats: GetCpuStats
         ):
             # ARRANGE
-            zone_path = common_paths.intel_rapl / 'intel-rapl:0'
-            zone_path.mkdir(parents=True)
-            sensor_path = zone_path / 'energy_uj'
-            sensor_path.touch()
-            sensor_path.write_text('5000000')
-
-            get_cpu_stats = create_cpu_monitor(
-                common_paths.proc, common_paths.sys
-            )
+            sensor_path = common_paths.intel_rapl / 'intel-rapl:0' / 'energy_uj'
 
             # ACT
-            # This call is necessary, but the power consumption values are most
-            # certainly 0 since we need Δ to calculate them in most of the
-            # cases, so we aren’t interested in this snapshot.
             get_cpu_stats()
 
             # Now we change the output of the sensor before the next read.
             sensor_path.write_text('6000000')
 
-            # This time, the power consumption must’ve been calculated, so we
-            # take this snapshot.
+            # And, just to ensure we don’t get a division-by-zero error, we
+            # increase system tick count.
+            common_paths.proc_stat.write_text(
+                'cpu  18080480 31047 3621744 155066244 2810089 1482860 594878 0 0 0',
+                encoding='utf-8',
+            )
+
             cpu_stats = get_cpu_stats()
 
             # ASSERT
-            # The time delta is not introduced explicitly because it is simply 1
             correct_value = (6_000_000 - 5_000_000) / 1_000_000
             calculated_value = cpu_stats.power_consumption_watt[sensor_path]
             assert calculated_value is not None
@@ -853,88 +832,93 @@ class TestGetCpuData:
                 'invalid_content', ['not-a-number', '12.5', '', '\x00\x00\x00']
             )
             def test_warns_on_value_error(
-                self, common_paths: CommonPaths, invalid_content: str
+                self,
+                common_paths: CommonPaths,
+                get_cpu_stats: GetCpuStats,
+                invalid_content: str,
             ):
                 # ARRANGE
-                zone_path = common_paths.intel_rapl / 'intel-rapl:0'
-                zone_path.mkdir(parents=True)
-                sensor_path = zone_path / 'energy_uj'
-
-                # The sensor must be valid during discovery.
-                sensor_path.write_text('1000000')
-
-                get_cpu_stats = create_cpu_monitor(
-                    common_paths.proc, common_paths.sys
+                sensor_path = (
+                    common_paths.intel_rapl / 'intel-rapl:0' / 'energy_uj'
                 )
 
                 # ACT
-                # Corrupt the sensor file after it has been discovered.
                 sensor_path.write_text(invalid_content)
 
                 # ASSERT
                 with warns(PowerTelemetrySensorValueWarning):
                     get_cpu_stats()
 
+            @mark.filterwarnings(
+                'ignore::pytop.backend.cpu.exceptions.PowerTelemetrySensorValueWarning'
+            )
             def test_sensor_is_not_included_on_value_error(
-                self, common_paths: CommonPaths, monkeypatch: MonkeyPatch
+                self, common_paths: CommonPaths, get_cpu_stats: GetCpuStats
             ):
                 # ARRANGE
-                zone_path = common_paths.intel_rapl / 'intel-rapl:0'
-                zone_path.mkdir(parents=True)
-                sensor_path = zone_path / 'energy_uj'
-                sensor_path.write_text('1000000')
-
-                get_cpu_stats = create_cpu_monitor(
-                    common_paths.proc, common_paths.sys
+                sensor_path = (
+                    common_paths.intel_rapl / 'intel-rapl:0' / 'energy_uj'
                 )
 
                 # ACT
-                # Initial call to establish the first measurement.
                 get_cpu_stats()
 
                 # Second call with a valid delta.
-                sensor_path.write_text('2000000')
+                common_paths.proc_stat.write_text(
+                    'cpu  18080480 31047 3621744 155066244 2810089 1482860 594878 0 0 0',
+                    encoding='utf-8',
+                )
+                sensor_path.write_text('6000000')
                 cpu_stats_1 = get_cpu_stats()
 
                 # Third call with corrupted data.
+                common_paths.proc_stat.write_text(
+                    'cpu  18100479 31047 3621744 155066244 2810089 1482860 594878 0 0 0',
+                    encoding='utf-8',
+                )
                 sensor_path.write_text('rubbish')
-                with warns(PowerTelemetrySensorValueWarning):
-                    cpu_stats_2 = get_cpu_stats()
+                cpu_stats_2 = get_cpu_stats()
 
                 # ASSERT
                 assert sensor_path in cpu_stats_1.power_consumption_watt
                 assert sensor_path not in cpu_stats_2.power_consumption_watt
 
+            @mark.filterwarnings(
+                'ignore::pytop.backend.cpu.exceptions.PowerTelemetrySensorValueWarning'
+            )
             def test_clears_previous_state_on_value_error(
-                self, common_paths: CommonPaths, monkeypatch: MonkeyPatch
+                self, common_paths: CommonPaths, get_cpu_stats: GetCpuStats
             ):
                 # ARRANGE
-                zone_path = common_paths.intel_rapl / 'intel-rapl:0'
-                zone_path.mkdir(parents=True)
-                sensor_path = zone_path / 'energy_uj'
-
-                # The sensor must be valid during discovery.
-                sensor_path.write_text('1000000')
-
-                get_cpu_stats = create_cpu_monitor(
-                    common_paths.proc, common_paths.sys
+                sensor_path = (
+                    common_paths.intel_rapl / 'intel-rapl:0' / 'energy_uj'
                 )
 
                 # ACT
-                # Initial call to establish the first measurement.
                 get_cpu_stats()
 
                 # Second call with a valid delta.
-                sensor_path.write_text('2000000')
+                common_paths.proc_stat.write_text(
+                    'cpu  18080480 31047 3621744 155066244 2810089 1482860 594878 0 0 0',
+                    encoding='utf-8',
+                )
+                sensor_path.write_text('6000000')
                 stats_valid = get_cpu_stats()
 
                 # Third call with corrupted data to trigger state cleanup.
+                common_paths.proc_stat.write_text(
+                    'cpu  18090479 31047 3621744 155066244 2810089 1482860 594878 0 0 0',
+                    encoding='utf-8',
+                )
                 sensor_path.write_text('rubbish')
-                with warns(PowerTelemetrySensorValueWarning):
-                    stats_error = get_cpu_stats()
+                stats_error = get_cpu_stats()
 
                 # 4. Fourth call with valid data to verify the state was cleared.
-                sensor_path.write_text('3000000')
+                common_paths.proc_stat.write_text(
+                    'cpu  18080579 41046 3621744 155066244 2810089 1482860 594878 0 0 0',
+                    encoding='utf-8',
+                )
+                sensor_path.write_text('7000000')
                 stats_recovered = get_cpu_stats()
 
                 # ASSERT
@@ -953,47 +937,36 @@ class TestGetCpuData:
                     stats_recovered.power_consumption_watt[sensor_path] is None
                 )
 
-            def test_warns_if_sensor_not_found(self, common_paths: CommonPaths):
+            @mark.filterwarnings(
+                'ignore::pytop.backend.cpu.power_telemetry.exceptions.EnergyUjNotFoundWarning'
+            )
+            def test_warns_if_sensor_not_found(
+                self, common_paths: CommonPaths, get_cpu_stats: GetCpuStats
+            ):
                 # ARRANGE
-                zone_path = common_paths.intel_rapl / 'intel-rapl:0'
-                zone_path.mkdir(parents=True)
-                sensor_path = zone_path / 'energy_uj'
-                sensor_path.touch()
-                sensor_path.write_text('5000000')
-
-                # ACT
-                # On this call, the created sensor is discovered.
-                get_cpu_stats = create_cpu_monitor(
-                    common_paths.proc, common_paths.sys
+                sensor_path = (
+                    common_paths.intel_rapl / 'intel-rapl:0' / 'energy_uj'
                 )
 
-                # Now we delete the sensor.
+                # ACT
                 sensor_path.unlink()
-                assert not sensor_path.exists()
 
                 # ASSERT
-                # `get_cpu_stats()` will try to read the sensor, but there’s
-                # nothing to read any longer.
                 with warns(PowerTelemetrySensorNotFoundWarning):
                     get_cpu_stats()
 
+            @mark.filterwarnings(
+                'ignore::pytop.backend.cpu.power_telemetry.exceptions.EnergyUjPermissionWarning'
+            )
             def test_warns_if_sensor_permission_denied(
-                self, common_paths: CommonPaths
+                self, common_paths: CommonPaths, get_cpu_stats: GetCpuStats
             ):
                 # ARRANGE
-                zone_path = common_paths.intel_rapl / 'intel-rapl:0'
-                zone_path.mkdir(parents=True)
-                sensor_path = zone_path / 'energy_uj'
-                sensor_path.touch()
-                sensor_path.write_text('5000000')
-
-                # ACT
-                # On this call, the created sensor is discovered successfully.
-                get_cpu_stats = create_cpu_monitor(
-                    common_paths.proc, common_paths.sys
+                sensor_path = (
+                    common_paths.intel_rapl / 'intel-rapl:0' / 'energy_uj'
                 )
 
-                # Now we revoke permissions before the first read in get_cpu_stats.
+                # ACT
                 sensor_path.chmod(0o000)
 
                 # ASSERT
@@ -1016,53 +989,46 @@ class TestGetCpuData:
             def test_rediscovers_sensors_and_gives_correct_stats(
                 self,
                 common_paths: CommonPaths,
-                monkeypatch: MonkeyPatch,
+                get_cpu_stats: GetCpuStats,
                 recwarn: WarningsRecorder,
                 warning_type: type[Warning],
                 trigger_fn: Callable[[Path], object],
             ):
                 # ARRANGE
-
-                zone_path = common_paths.intel_rapl / 'intel-rapl:0'
-                zone_path.mkdir(parents=True)
-
-                sensor_path_to_fail = zone_path / 'energy_uj'
-                sensor_path_to_fail.touch()
-                sensor_path_to_fail.write_text('5000000', 'utf-8')
-
-                # ACT
-                # On this call, the created sensor is discovered.
-                get_cpu_stats = create_cpu_monitor(
-                    common_paths.proc, common_paths.sys
+                sensor_path_to_fail = (
+                    common_paths.intel_rapl / 'intel-rapl:0' / 'energy_uj'
                 )
 
-                # Here, the sensor is still present, and its value is correct.
+                # ACT
                 cpu_stats_1 = get_cpu_stats()
 
-                # Now, we trigger the failure on the initial sensor...
+                # Trigger failure
                 trigger_fn(sensor_path_to_fail)
 
-                # ...and add a new sensor.
-                subzone_path = zone_path / 'intel-rapl:0:0'
+                # Add new sensor
+                subzone_path = (
+                    common_paths.intel_rapl / 'intel-rapl:0' / 'intel-rapl:0:0'
+                )
                 subzone_path.mkdir(parents=True)
-
                 sensor_path_to_remain = subzone_path / 'energy_uj'
-                sensor_path_to_remain.touch()
                 sensor_path_to_remain.write_text('6000000', 'utf-8')
-                subzone_name_path = subzone_path / 'name'
-                subzone_name_path.touch()
-                subzone_name_path.write_text('core', 'utf-8')
+                (subzone_path / 'name').write_text('core', 'utf-8')
 
-                # Since `get_cpu_stats` fails to read the initial sensor, it raises
-                # a warning and starts a new sensor discovery. It discovers the
-                # new sensor and reads it.
+                common_paths.proc_stat.write_text(
+                    'cpu  18080480 31047 3621744 155066244 2810089 1482860 594878 0 0 0',
+                    encoding='utf-8',
+                )
+
+                # Discovery happens on failure
                 cpu_stats_2 = get_cpu_stats()
 
-                # Update the remaining sensor’s value.
-                sensor_path_to_remain.write_text('7000000', 'utf-8')
+                common_paths.proc_stat.write_text(
+                    'cpu  18081479 31047 3621744 155066244 2810089 1482860 594878 0 0 0',
+                    encoding='utf-8',
+                )
 
-                # Now, `get_cpu_stats()` must calculate that the power
-                # consumption during the time period that passed (1 second) was 1 watt.
+                # Update value
+                sensor_path_to_remain.write_text('7000000', 'utf-8')
                 cpu_stats_3 = get_cpu_stats()
 
                 # ASSERT
@@ -1079,14 +1045,12 @@ class TestGetCpuData:
                     in cpu_stats_3.power_consumption_watt
                 )
 
-                final_sensor_power_consumption = (
-                    cpu_stats_3.power_consumption_watt[sensor_path_to_remain]
-                )
-                assert final_sensor_power_consumption is not None
-                assert math.isclose(final_sensor_power_consumption, 1)
+                final_power = cpu_stats_3.power_consumption_watt[
+                    sensor_path_to_remain
+                ]
+                assert final_power is not None
+                assert math.isclose(final_power, 1.0)
 
-                counter = 0
-                for warning in recwarn.list:
-                    if isinstance(warning.message, warning_type):
-                        counter += 1
-                assert counter == 1
+                assert any(
+                    isinstance(w.message, warning_type) for w in recwarn.list
+                )

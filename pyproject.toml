@@ -26,6 +26,8 @@ extraPaths = ['src']
 pythonpath = ["src"]
 strict = true
 addopts = ["--import-mode=importlib"]
+filterwarnings = ["error"]
+
 
 [dependency-groups]
 dev = [
