@@ -13,7 +13,6 @@ class PowerTelemetrySensor:
 
     name: str
     path: Path
-    value: int
     type: Literal['power', 'energy']
 
 
