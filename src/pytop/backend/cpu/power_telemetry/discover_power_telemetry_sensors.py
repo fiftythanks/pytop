@@ -81,17 +81,17 @@ def discover_power_telemetry_sensors(
                             )
         else:
             warnings.warn(PowercapInterfaceNotFoundWarning(powercap_path))
-    else:
-        warnings.warn(PowercapNotFoundWarning(powercap_path))
 
     # -------------------------------------------------------------------------
     # HWMON
     # -------------------------------------------------------------------------
+    # TODO: Implement later. Virtually all modern machines will have powercap.
     hwmon_path = sys_path / 'class' / 'hwmon'
 
     if hwmon_path.exists():
-        # TODO: Implement later. Virtually all modern machines will have powercap.
-        pass
+        if not powercap_path.exists():
+            warnings.warn(PowercapNotFoundWarning(powercap_path))
+
     elif powercap_path.exists():
         warnings.warn(HwmonNotFoundWarning(hwmon_path))
     else:
