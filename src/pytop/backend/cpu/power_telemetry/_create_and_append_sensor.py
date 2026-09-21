@@ -81,6 +81,6 @@ def create_and_append_powercap_energy_sensor(
         )
         return
 
-    sensor = EnergySensor(zone_name, zone_path)
+    sensor = EnergySensor(zone_name, energy_uj_path)
 
     energy_sensors.append(sensor)

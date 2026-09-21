@@ -13,6 +13,7 @@ class PowerTelemetrySensor:
 
     name: str
     path: Path
+    """Path to the file with the value the sensor reports."""
     type: Literal['power', 'energy']
 
 
