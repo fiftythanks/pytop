@@ -10,8 +10,10 @@ from pytop.backend.cpu.power_telemetry.discover_power_telemetry_sensors import (
 from pytop.backend.cpu.power_telemetry.exceptions import (
     EnergyUjNotFoundWarning,
     EnergyUjPermissionWarning,
+    HwmonNotFoundWarning,
     PowercapInterfaceNotFoundWarning,
     PowercapNotFoundWarning,
+    PowerTelemetryNotFoundWarning,
     PowerTelemetrySensorValueWarning,
     ZoneFileEmptyWarning,
     ZoneNameNotFoundWarning,
@@ -31,6 +33,13 @@ def powercap_path(sys_path: Path) -> Path:
     powercap_path = sys_path / 'class' / 'powercap'
     powercap_path.mkdir(parents=True)
     return powercap_path
+
+
+@fixture
+def hwmon_path(sys_path: Path) -> Path:
+    hwmon_path = sys_path / 'class' / 'hwmon'
+    hwmon_path.mkdir(parents=True)
+    return hwmon_path
 
 
 @dataclass
@@ -121,6 +130,12 @@ def mock_powercap_backend(powercap_path: Path) -> MockPowercapBackend:
         return backend_path
 
     return _mock
+
+
+def test_power_telemetry_not_found(sys_path: Path):
+    # ASSERT
+    with warns(PowerTelemetryNotFoundWarning):
+        discover_power_telemetry_sensors(sys_path)
 
 
 class TestPowercap:
@@ -470,3 +485,11 @@ class TestPowercapInterfaces:
 
 class TestHwmon:
     """Tests related to the `hwmon` dir search."""
+
+    def test_warns_if_not_found_and_powercap_exists(self, powercap_path: Path):
+        # ARRANGE
+        sys_path = powercap_path.parent.parent
+
+        # ASSERT
+        with warns(HwmonNotFoundWarning):
+            discover_power_telemetry_sensors(sys_path)

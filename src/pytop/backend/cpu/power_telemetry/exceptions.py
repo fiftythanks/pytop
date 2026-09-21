@@ -7,10 +7,25 @@ from pytop.backend.exceptions import (
 )
 
 
+class PowerTelemetryNotFoundWarning(FileNotFoundWarning):
+    def __init__(self, sys_path: Path):
+        super().__init__(
+            sys_path,
+            'No power telemetry related to CPU was found in the system',
+        )
+
+
 class PowercapNotFoundWarning(FileNotFoundWarning):
     def __init__(self, powercap_path: Path):
         super().__init__(
             powercap_path, 'Powercap framework isn’t found in the system.'
+        )
+
+
+class HwmonNotFoundWarning(FileNotFoundWarning):
+    def __init__(self, hwmon_path: Path):
+        super().__init__(
+            hwmon_path, 'HWMON framework isn’t found in the system.'
         )
 
 
