@@ -184,7 +184,6 @@ class TestPowercapInterfaces:
                     s
                     for s in sensors.energy_sensors
                     if s.name == zone.name
-                    and s.value == zone.energy_uj
                     and s.path.samefile(backend_path / zone.relative_path)
                 ),
                 None,
@@ -313,6 +312,32 @@ class TestPowercapInterfaces:
                     with warns(ZoneNamePermissionWarning, match=backend):
                         discover_power_telemetry_sensors(sys_path)
 
+                def test_falls_back_to_empty(
+                    self,
+                    sys_path: Path,
+                    mock_powercap_backend: MockPowercapBackend,
+                    backend: str,
+                    dir_name: str,
+                    zone_prefix: str,
+                    all_zones: list[PowercapZone],
+                ):
+                    # ARRANGE
+                    mock_powercap_backend(
+                        dir_name,
+                        PowercapZone(
+                            relative_path=Path(f'{zone_prefix}0'),
+                            energy_uj=0,
+                            name='zone',
+                            name_mode=0o000,
+                        ),
+                    )
+
+                    # ACT
+                    sensors = discover_power_telemetry_sensors(sys_path)
+
+                    # ASSERT
+                    assert sensors.energy_sensors[0].name == ''
+
         class TestEnergyUj:
             class TestIsEmpty:
                 def test_raises_warning(
@@ -387,6 +412,32 @@ class TestPowercapInterfaces:
                     with warns(PowerTelemetrySensorValueWarning):
                         discover_power_telemetry_sensors(sys_path)
 
+                def test_sensor_is_included(
+                    self,
+                    sys_path: Path,
+                    mock_powercap_backend: MockPowercapBackend,
+                    backend: str,
+                    dir_name: str,
+                    zone_prefix: str,
+                    all_zones: list[PowercapZone],
+                ):
+                    # ARRANGE
+                    mock_powercap_backend(
+                        dir_name,
+                        PowercapZone(
+                            relative_path=Path(f'{zone_prefix}0'),
+                            energy_uj=0,
+                            name='zone',
+                        ),
+                    )
+
+                    # ACT
+                    sensors = discover_power_telemetry_sensors(sys_path)
+
+                    # ASSERT
+                    assert len(sensors.energy_sensors) == 1
+                    assert sensors.energy_sensors[0].name == 'zone'
+
             class TestIsLessThanNull:
                 def test_raises_warning(
                     self,
@@ -410,6 +461,31 @@ class TestPowercapInterfaces:
                     # ASSERT
                     with warns(PowerTelemetrySensorValueWarning):
                         discover_power_telemetry_sensors(sys_path)
+
+                def test_sensor_not_included(
+                    self,
+                    sys_path: Path,
+                    mock_powercap_backend: MockPowercapBackend,
+                    backend: str,
+                    dir_name: str,
+                    zone_prefix: str,
+                    all_zones: list[PowercapZone],
+                ):
+                    # ARRANGE
+                    mock_powercap_backend(
+                        dir_name,
+                        PowercapZone(
+                            relative_path=Path(f'{zone_prefix}0'),
+                            energy_uj=-1,
+                            name='zone',
+                        ),
+                    )
+
+                    # ACT
+                    sensors = discover_power_telemetry_sensors(sys_path)
+
+                    # ASSERT
+                    assert len(sensors.energy_sensors) == 0
 
             class TestNonNumberValue:
                 def test_raises_warning(
@@ -435,6 +511,31 @@ class TestPowercapInterfaces:
                     with warns(PowerTelemetrySensorValueWarning):
                         discover_power_telemetry_sensors(sys_path)
 
+                def test_sensor_not_included(
+                    self,
+                    sys_path: Path,
+                    mock_powercap_backend: MockPowercapBackend,
+                    backend: str,
+                    dir_name: str,
+                    zone_prefix: str,
+                    all_zones: list[PowercapZone],
+                ):
+                    # ARRANGE
+                    mock_powercap_backend(
+                        dir_name,
+                        PowercapZone(
+                            relative_path=Path(f'{zone_prefix}0'),
+                            energy_uj='not-a-number',
+                            name='zone',
+                        ),
+                    )
+
+                    # ACT
+                    sensors = discover_power_telemetry_sensors(sys_path)
+
+                    # ASSERT
+                    assert len(sensors.energy_sensors) == 0
+
             class TestFileNotFoundError:
                 def test_raises_warning(
                     self,
@@ -456,6 +557,29 @@ class TestPowercapInterfaces:
                     # ASSERT
                     with warns(EnergyUjNotFoundWarning, match=backend):
                         discover_power_telemetry_sensors(sys_path)
+
+                def test_sensor_not_included(
+                    self,
+                    sys_path: Path,
+                    mock_powercap_backend: MockPowercapBackend,
+                    backend: str,
+                    dir_name: str,
+                    zone_prefix: str,
+                    all_zones: list[PowercapZone],
+                ):
+                    # ARRANGE
+                    mock_powercap_backend(
+                        dir_name,
+                        PowercapZone(
+                            relative_path=Path(f'{zone_prefix}0'), name='zone'
+                        ),
+                    )
+
+                    # ACT
+                    sensors = discover_power_telemetry_sensors(sys_path)
+
+                    # ASSERT
+                    assert len(sensors.energy_sensors) == 0
 
             class TestPermissionError:
                 def test_raises_warning(
@@ -481,6 +605,32 @@ class TestPowercapInterfaces:
                     # ASSERT
                     with warns(EnergyUjPermissionWarning, match=backend):
                         discover_power_telemetry_sensors(sys_path)
+
+                def test_sensor_not_included(
+                    self,
+                    sys_path: Path,
+                    mock_powercap_backend: MockPowercapBackend,
+                    backend: str,
+                    dir_name: str,
+                    zone_prefix: str,
+                    all_zones: list[PowercapZone],
+                ):
+                    # ARRANGE
+                    mock_powercap_backend(
+                        dir_name,
+                        PowercapZone(
+                            relative_path=Path(f'{zone_prefix}0'),
+                            energy_uj=0,
+                            name='zone',
+                            energy_uj_mode=0o000,
+                        ),
+                    )
+
+                    # ACT
+                    sensors = discover_power_telemetry_sensors(sys_path)
+
+                    # ASSERT
+                    assert len(sensors.energy_sensors) == 0
 
 
 class TestHwmon:
