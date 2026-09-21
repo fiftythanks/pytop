@@ -17,6 +17,8 @@ from pytop.backend.cpu.power_telemetry.sensors import EnergySensor
 def create_and_append_powercap_energy_sensor(
     backend: str, zone_path: Path, energy_sensors: list[EnergySensor]
 ):
+    """Appends only those sensors that have `energy_uj >= 0`."""
+
     zone_name_path = zone_path / 'name'
 
     try:
@@ -57,11 +59,6 @@ def create_and_append_powercap_energy_sensor(
             )
 
         try:
-            # DILEMMA: Shouldn’t we check if the value in the file is
-            # actually a floating-point number, not an integer?
-            #
-            # Values less than 0 are impossible, so including
-            # such a sensor into sensors would be wrong.
             if int(energy_uj) < 0:
                 warnings.warn(
                     PowerTelemetrySensorValueWarning(energy_uj, energy_uj_path)
@@ -84,6 +81,6 @@ def create_and_append_powercap_energy_sensor(
         )
         return
 
-    sensor = EnergySensor(zone_name, zone_path, int(energy_uj))
+    sensor = EnergySensor(zone_name, zone_path)
 
     energy_sensors.append(sensor)

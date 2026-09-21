@@ -22,12 +22,18 @@ def discover_power_telemetry_sensors(
 ) -> PowerTelemetrySensors:
     """Search the system for power telemetry sensors.
 
-    First it goes through the `/sys/class/powercap/intel-rapl/` directory. If
-    no sensors found there or the directory doesn’t exist, it checks the
-    `/sys/class/powercap/arm-scmi/` directory.
+    When searching, it checks each sensor’s power/energy consumption value. If
+    the value is incorrect, it doesn’t include the sensor into the resulting
+    list. Examples of incorrect values are not a number or a negative number.
 
-    (NOT IMPLEMENTED) Regardless of the outcome, it then proceeds to search the
-    `/sys/class/hwmon/` directory for any sensors present there.
+    Search strategy:
+
+        First it goes through the `/sys/class/powercap/intel-rapl/` directory. If
+        no sensors found there or the directory doesn’t exist, it checks the
+        `/sys/class/powercap/arm-scmi/` directory.
+
+        (NOT IMPLEMENTED) Regardless of the outcome, it then proceeds to search the
+        `/sys/class/hwmon/` directory for any sensors present there.
 
     All found sensors are returned as `PowerTelemetrySensors` afterwards.
     """
