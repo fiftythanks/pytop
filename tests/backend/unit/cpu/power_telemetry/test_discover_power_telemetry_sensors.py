@@ -184,7 +184,9 @@ class TestPowercapInterfaces:
                     s
                     for s in sensors.energy_sensors
                     if s.name == zone.name
-                    and s.path.samefile(backend_path / zone.relative_path)
+                    and s.path.samefile(
+                        backend_path / zone.relative_path / 'energy_uj'
+                    )
                 ),
                 None,
             )
