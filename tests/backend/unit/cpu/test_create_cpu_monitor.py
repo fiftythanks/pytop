@@ -1,12 +1,17 @@
 import math
-from collections.abc import Generator
+import time
+from collections.abc import Callable, Generator
 from dataclasses import dataclass
+from operator import methodcaller
 from pathlib import Path
 
-from pytest import fixture, mark, warns
+from pytest import MonkeyPatch, WarningsRecorder, fixture, mark, warns
 
 from pytop.backend.cpu.create_cpu_monitor import GetCpuStats, create_cpu_monitor
 from pytop.backend.cpu.exceptions import (
+    PowerTelemetrySensorNotFoundWarning,
+    PowerTelemetrySensorPermissionWarning,
+    PowerTelemetrySensorValueWarning,
     ProcCpuinfoFileNotFoundWarning,
     ProcCpuinfoIndexWarning,
     ProcCpuinfoPermissionWarning,
@@ -34,22 +39,18 @@ class CommonPaths:
     proc_cpuinfo: Path
     proc_loadvg: Path
     proc_uptime: Path
+    sys: Path
+    powercap: Path
+    intel_rapl: Path
 
 
 @fixture
 def common_paths(tmp_path: Path) -> CommonPaths:
     """Return dict of paths to common dirs.
 
-    The fixture creates a temporary directory and inserts into it common
-    directories like `proc`, relative to the temporary directory just as they
-    are located relative to the root directory in a real file system.
-
-    Illustration:
-
-    ```text
-    <tmp-dir>/
-    └── proc/
-    ```
+    The fixture creates a temporary directory, inserts into it `proc/` and
+    `sys/class/powercap/` and returns paths to them, as well as to other common
+    files and directories (without creating them) in a `CommonPaths` dataclass.
     """
 
     proc_path = tmp_path / 'proc'
@@ -60,14 +61,40 @@ def common_paths(tmp_path: Path) -> CommonPaths:
     proc_loadavg = proc_path / 'loadavg'
     proc_uptime = proc_path / 'uptime'
 
+    sys_path = tmp_path / 'sys'
+    powercap_path = sys_path / 'class' / 'powercap'
+    powercap_path.mkdir(parents=True)
+    intel_rapl_path = powercap_path / 'intel-rapl'
+
     return CommonPaths(
-        proc_path, proc_stat, proc_cpuinfo, proc_loadavg, proc_uptime
+        proc_path,
+        proc_stat,
+        proc_cpuinfo,
+        proc_loadavg,
+        proc_uptime,
+        sys_path,
+        powercap_path,
+        intel_rapl_path,
     )
 
 
 @fixture
 def get_cpu_stats(common_paths: CommonPaths) -> GetCpuStats:
-    return create_cpu_monitor(common_paths.proc)
+    return create_cpu_monitor(common_paths.proc, common_paths.sys)
+
+
+@fixture(autouse=True)
+def mock_time_monotonic_ns(monkeypatch: MonkeyPatch, step: int = 1_000_000_000):
+    next_timestamp = 0
+
+    def _mock() -> int:
+        nonlocal next_timestamp
+        current_timestamp = next_timestamp
+        next_timestamp += step
+
+        return current_timestamp
+
+    monkeypatch.setattr(time, 'monotonic_ns', _mock)
 
 
 class TestGetCpuData:
@@ -787,10 +814,279 @@ class TestGetCpuData:
                     assert value is None
 
     class TestPowerConsumptionWatt:
-        # TODO: Is correct.
-        # ParsingErrors:
-        #   TODO: No file.
-        #   TODO: No permission.
-        #   TODO: Wrong value.
-        #   TODO: Wrong index.
-        pass
+        def test_outputs_correct_values(
+            self, common_paths: CommonPaths, monkeypatch: MonkeyPatch
+        ):
+            # ARRANGE
+            zone_path = common_paths.intel_rapl / 'intel-rapl:0'
+            zone_path.mkdir(parents=True)
+            sensor_path = zone_path / 'energy_uj'
+            sensor_path.touch()
+            sensor_path.write_text('5000000')
+
+            get_cpu_stats = create_cpu_monitor(
+                common_paths.proc, common_paths.sys
+            )
+
+            # ACT
+            # This call is necessary, but the power consumption values are most
+            # certainly 0 since we need Δ to calculate them in most of the
+            # cases, so we aren’t interested in this snapshot.
+            get_cpu_stats()
+
+            # Now we change the output of the sensor before the next read.
+            sensor_path.write_text('6000000')
+
+            # This time, the power consumption must’ve been calculated, so we
+            # take this snapshot.
+            cpu_stats = get_cpu_stats()
+
+            # ASSERT
+            # The time delta is not introduced explicitly because it is simply 1
+            correct_value = (6_000_000 - 5_000_000) / 1_000_000
+            calculated_value = cpu_stats.power_consumption_watt[sensor_path]
+            assert calculated_value is not None
+            assert math.isclose(correct_value, calculated_value)
+
+        class TestErrors:
+            @mark.parametrize(
+                'invalid_content', ['not-a-number', '12.5', '', '\x00\x00\x00']
+            )
+            def test_warns_on_value_error(
+                self, common_paths: CommonPaths, invalid_content: str
+            ):
+                # ARRANGE
+                zone_path = common_paths.intel_rapl / 'intel-rapl:0'
+                zone_path.mkdir(parents=True)
+                sensor_path = zone_path / 'energy_uj'
+
+                # The sensor must be valid during discovery.
+                sensor_path.write_text('1000000')
+
+                get_cpu_stats = create_cpu_monitor(
+                    common_paths.proc, common_paths.sys
+                )
+
+                # ACT
+                # Corrupt the sensor file after it has been discovered.
+                sensor_path.write_text(invalid_content)
+
+                # ASSERT
+                with warns(PowerTelemetrySensorValueWarning):
+                    get_cpu_stats()
+
+            def test_sensor_is_not_included_on_value_error(
+                self, common_paths: CommonPaths, monkeypatch: MonkeyPatch
+            ):
+                # ARRANGE
+                zone_path = common_paths.intel_rapl / 'intel-rapl:0'
+                zone_path.mkdir(parents=True)
+                sensor_path = zone_path / 'energy_uj'
+                sensor_path.write_text('1000000')
+
+                get_cpu_stats = create_cpu_monitor(
+                    common_paths.proc, common_paths.sys
+                )
+
+                # ACT
+                # Initial call to establish the first measurement.
+                get_cpu_stats()
+
+                # Second call with a valid delta.
+                sensor_path.write_text('2000000')
+                cpu_stats_1 = get_cpu_stats()
+
+                # Third call with corrupted data.
+                sensor_path.write_text('rubbish')
+                with warns(PowerTelemetrySensorValueWarning):
+                    cpu_stats_2 = get_cpu_stats()
+
+                # ASSERT
+                assert sensor_path in cpu_stats_1.power_consumption_watt
+                assert sensor_path not in cpu_stats_2.power_consumption_watt
+
+            def test_clears_previous_state_on_value_error(
+                self, common_paths: CommonPaths, monkeypatch: MonkeyPatch
+            ):
+                # ARRANGE
+                zone_path = common_paths.intel_rapl / 'intel-rapl:0'
+                zone_path.mkdir(parents=True)
+                sensor_path = zone_path / 'energy_uj'
+
+                # The sensor must be valid during discovery.
+                sensor_path.write_text('1000000')
+
+                get_cpu_stats = create_cpu_monitor(
+                    common_paths.proc, common_paths.sys
+                )
+
+                # ACT
+                # Initial call to establish the first measurement.
+                get_cpu_stats()
+
+                # Second call with a valid delta.
+                sensor_path.write_text('2000000')
+                stats_valid = get_cpu_stats()
+
+                # Third call with corrupted data to trigger state cleanup.
+                sensor_path.write_text('rubbish')
+                with warns(PowerTelemetrySensorValueWarning):
+                    stats_error = get_cpu_stats()
+
+                # 4. Fourth call with valid data to verify the state was cleared.
+                sensor_path.write_text('3000000')
+                stats_recovered = get_cpu_stats()
+
+                # ASSERT
+                calculated_power = stats_valid.power_consumption_watt[
+                    sensor_path
+                ]
+                assert calculated_power is not None
+                assert math.isclose(calculated_power, 1.0)
+
+                assert sensor_path not in stats_error.power_consumption_watt
+
+                # Since the state was cleared in the previous step, this call
+                # should treat the sensor as a fresh first measurement.
+                assert sensor_path in stats_recovered.power_consumption_watt
+                assert (
+                    stats_recovered.power_consumption_watt[sensor_path] is None
+                )
+
+            def test_warns_if_sensor_not_found(self, common_paths: CommonPaths):
+                # ARRANGE
+                zone_path = common_paths.intel_rapl / 'intel-rapl:0'
+                zone_path.mkdir(parents=True)
+                sensor_path = zone_path / 'energy_uj'
+                sensor_path.touch()
+                sensor_path.write_text('5000000')
+
+                # ACT
+                # On this call, the created sensor is discovered.
+                get_cpu_stats = create_cpu_monitor(
+                    common_paths.proc, common_paths.sys
+                )
+
+                # Now we delete the sensor.
+                sensor_path.unlink()
+                assert not sensor_path.exists()
+
+                # ASSERT
+                # `get_cpu_stats()` will try to read the sensor, but there’s
+                # nothing to read any longer.
+                with warns(PowerTelemetrySensorNotFoundWarning):
+                    get_cpu_stats()
+
+            def test_warns_if_sensor_permission_denied(
+                self, common_paths: CommonPaths
+            ):
+                # ARRANGE
+                zone_path = common_paths.intel_rapl / 'intel-rapl:0'
+                zone_path.mkdir(parents=True)
+                sensor_path = zone_path / 'energy_uj'
+                sensor_path.touch()
+                sensor_path.write_text('5000000')
+
+                # ACT
+                # On this call, the created sensor is discovered successfully.
+                get_cpu_stats = create_cpu_monitor(
+                    common_paths.proc, common_paths.sys
+                )
+
+                # Now we revoke permissions before the first read in get_cpu_stats.
+                sensor_path.chmod(0o000)
+
+                # ASSERT
+                with warns(PowerTelemetrySensorPermissionWarning):
+                    get_cpu_stats()
+
+            @mark.parametrize(
+                ['warning_type', 'trigger_fn'],
+                [
+                    (
+                        PowerTelemetrySensorNotFoundWarning,
+                        methodcaller('unlink'),
+                    ),
+                    (
+                        PowerTelemetrySensorPermissionWarning,
+                        methodcaller('chmod', 0o000),
+                    ),
+                ],
+            )
+            def test_rediscovers_sensors_and_gives_correct_stats(
+                self,
+                common_paths: CommonPaths,
+                monkeypatch: MonkeyPatch,
+                recwarn: WarningsRecorder,
+                warning_type: type[Warning],
+                trigger_fn: Callable[[Path], object],
+            ):
+                # ARRANGE
+
+                zone_path = common_paths.intel_rapl / 'intel-rapl:0'
+                zone_path.mkdir(parents=True)
+
+                sensor_path_to_fail = zone_path / 'energy_uj'
+                sensor_path_to_fail.touch()
+                sensor_path_to_fail.write_text('5000000', 'utf-8')
+
+                # ACT
+                # On this call, the created sensor is discovered.
+                get_cpu_stats = create_cpu_monitor(
+                    common_paths.proc, common_paths.sys
+                )
+
+                # Here, the sensor is still present, and its value is correct.
+                cpu_stats_1 = get_cpu_stats()
+
+                # Now, we trigger the failure on the initial sensor...
+                trigger_fn(sensor_path_to_fail)
+
+                # ...and add a new sensor.
+                subzone_path = zone_path / 'intel-rapl:0:0'
+                subzone_path.mkdir(parents=True)
+
+                sensor_path_to_remain = subzone_path / 'energy_uj'
+                sensor_path_to_remain.touch()
+                sensor_path_to_remain.write_text('6000000', 'utf-8')
+                subzone_name_path = subzone_path / 'name'
+                subzone_name_path.touch()
+                subzone_name_path.write_text('core', 'utf-8')
+
+                # Since `get_cpu_stats` fails to read the initial sensor, it raises
+                # a warning and starts a new sensor discovery. It discovers the
+                # new sensor and reads it.
+                cpu_stats_2 = get_cpu_stats()
+
+                # Update the remaining sensor’s value.
+                sensor_path_to_remain.write_text('7000000', 'utf-8')
+
+                # Now, `get_cpu_stats()` must calculate that the power
+                # consumption during the time period that passed (1 second) was 1 watt.
+                cpu_stats_3 = get_cpu_stats()
+
+                # ASSERT
+                assert sensor_path_to_fail in cpu_stats_1.power_consumption_watt
+                assert (
+                    sensor_path_to_fail
+                    not in cpu_stats_2.power_consumption_watt
+                    and sensor_path_to_fail
+                    not in cpu_stats_3.power_consumption_watt
+                )
+                assert (
+                    sensor_path_to_remain in cpu_stats_2.power_consumption_watt
+                    and sensor_path_to_remain
+                    in cpu_stats_3.power_consumption_watt
+                )
+
+                final_sensor_power_consumption = (
+                    cpu_stats_3.power_consumption_watt[sensor_path_to_remain]
+                )
+                assert final_sensor_power_consumption is not None
+                assert math.isclose(final_sensor_power_consumption, 1)
+
+                counter = 0
+                for warning in recwarn.list:
+                    if isinstance(warning.message, warning_type):
+                        counter += 1
+                assert counter == 1

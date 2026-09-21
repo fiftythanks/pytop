@@ -3,10 +3,10 @@
 import warnings
 from pathlib import Path
 
+from pytop.backend.cpu.exceptions import PowerTelemetrySensorValueWarning
 from pytop.backend.cpu.power_telemetry.exceptions import (
     EnergyUjNotFoundWarning,
     EnergyUjPermissionWarning,
-    PowerTelemetrySensorValueWarning,
     ZoneFileEmptyWarning,
     ZoneNameNotFoundWarning,
     ZoneNamePermissionWarning,

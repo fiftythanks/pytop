@@ -31,7 +31,7 @@ class EnergySensor(PowerTelemetrySensor):
     type: Literal['energy'] = 'energy'
 
 
-@dataclass(frozen=True)
+@dataclass
 class PowerTelemetrySensors:
     energy_sensors: list[EnergySensor]
     power_sensors: list[PowerSensor]

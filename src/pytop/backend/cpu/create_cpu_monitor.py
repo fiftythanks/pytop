@@ -1,9 +1,13 @@
+import time
 import warnings
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
 
 from pytop.backend.cpu.exceptions import (
+    PowerTelemetrySensorNotFoundWarning,
+    PowerTelemetrySensorPermissionWarning,
+    PowerTelemetrySensorValueWarning,
     ProcCpuinfoFileNotFoundWarning,
     ProcCpuinfoIndexWarning,
     ProcCpuinfoPermissionWarning,
@@ -20,6 +24,9 @@ from pytop.backend.cpu.exceptions import (
     ProcUptimePermissionWarning,
     ProcUptimeValueWarning,
 )
+from pytop.backend.cpu.power_telemetry.discover_power_telemetry_sensors import (
+    discover_power_telemetry_sensors,
+)
 
 
 @dataclass(frozen=True)
@@ -30,15 +37,21 @@ class TmpCpuStats:
     load_avg_5min: float | None
     load_avg_15min: float | None
     usage_percent: float | None
+    power_consumption_watt: dict[Path, float | None]
 
 
 class GetCpuStats(Protocol):
     def __call__(self) -> TmpCpuStats: ...
 
 
-def create_cpu_monitor(proc_path: Path = Path('/proc')) -> GetCpuStats:
+def create_cpu_monitor(
+    proc_path: Path = Path('/proc'), sys_path: Path = Path('/sys')
+) -> GetCpuStats:
     # Across all CPUs.
     previous_ticks = {'total': 0, 'used': 0}
+    # Maps the sensor `Path` to a tuple of `(previous_uj_value, previous_timestamp).`
+    previous_energy: dict[Path, tuple[int, int]] = {}
+    # TODO: Add `previous_power` when you implement HWMON search.
 
     # Paths to files to parse.
     proc_uptime_path = proc_path / 'uptime'
@@ -46,27 +59,35 @@ def create_cpu_monitor(proc_path: Path = Path('/proc')) -> GetCpuStats:
     proc_cpuinfo_path = proc_path / 'cpuinfo'
     proc_stat_path = proc_path / 'stat'
 
+    # Runs once to find all the existing sensors. The sensor classes hold only
+    # metadata. Values must be read in `get_cpu_stats`.
+    power_telemetry_sensors = discover_power_telemetry_sensors(sys_path)
+
     def get_cpu_stats() -> TmpCpuStats:
         """Parse system files and get a snapshot of CPU stats.
 
         This function creates a snapshot of all CPU-relevant stats at the
         moment in the form of a dictionary, where keys are stat names and
-        values are their values, with the exception of CPU core stats. Those
-        are structured in the same way, but each core has its own snapshot
-        and all core snapshots are inside a dictionary where keys are core IDs
-        and values are the core-snapshot dictionaries. Finally, this dictionary
-        of core snapshots is referenced as `'core_stats'` in the `'cpu_stats'`
-        snapshot `get_cpu_stats()` returns.
+        values are their values, with the exception of power consumption and CPU
+        core stats. Those are structured in the same way, but each power
+        telemetry sensor and each core has its own snapshot, therefore their
+        snapshots are inside separate dictionaries referenced by `power_sensors`
+        and `cores` keys in the snapshot.
 
         To illustrate:
 
         ```text
         cpu_stats
             load_avg_5min
-            core_stats
+            cores
                 freq
                 ...
             uptime
+            power_sensors
+                package-1
+                core
+                uncore
+                psys
             ...
         ```
 
@@ -75,15 +96,24 @@ def create_cpu_monitor(proc_path: Path = Path('/proc')) -> GetCpuStats:
             - `/proc/loadavg`
             - `/proc/cpuinfo`
             - `/proc/stat`
+            - `/sys/class/powercap/`
+            - (NOT IMPLEMENTED) `/sys/class/hwmon/`
 
         Gets and calculates:
             - System uptime (in seconds)
             - CPU load average for 1, 5 and 15 min
             - CPU name (e.g. Intel(R) Core(TM) i7-10610U CPU @ 1.80GHz)
             - Total CPU usage in per cent
+            - Power consumption per each power telemetry sensor, in µW.
 
-        Note: Whenever a file is absent, the corresponding stats are assigned
-        `None` values.
+        Note: Whenever a file corresponding to the uptime, load average, cpu
+        name or usage per cent contains an incorrect value, is not accessible
+        due to a permission error or simply does not exist, the corresponding
+        value is assigned `None` and a warning is issued, but the function still
+        returns successfully.
+
+        As for power telemetry sensors, it is similar, but sensors with
+        incorrect or absent values are not taken into account at all.
         """
 
         # =====================================================================
@@ -225,6 +255,103 @@ def create_cpu_monitor(proc_path: Path = Path('/proc')) -> GetCpuStats:
         # =====================================================================
         # POWER CONSUMPTION
         # =====================================================================
+        nonlocal power_telemetry_sensors
+        # `None` values are for first measurements, when delta can’t be calculated.
+        power_consumption_watt: dict[Path, float | None] = {}
+
+        # TODO: Move the definition up. At the moment, the function is defined every second.
+        def calculate_power_consumption():
+            nonlocal power_telemetry_sensors
+            nonlocal power_consumption_watt
+
+            for s in power_telemetry_sensors.energy_sensors:
+                # Because something could happen since the sensors were discovered,
+                # it is important to handle possible errors here.
+                try:
+                    current_timestamp = time.monotonic_ns()
+                    current_energy_uj_str = s.path.read_text()
+
+                    try:
+                        current_energy_uj = int(current_energy_uj_str)
+                    except ValueError:
+                        with warnings.catch_warnings():
+                            warnings.simplefilter('default')
+                            warnings.warn(
+                                PowerTelemetrySensorValueWarning(
+                                    current_energy_uj_str, s.path
+                                )
+                            )
+
+                        # If it’s just a small glitch in the kernel/hardware, as
+                        # soon as it disappears, the state starts afresh and the
+                        # consumption data coming from this sensor will show correctly.
+                        # DILEMMA: Might it be worth to handle the case when the
+                        # glitch or whatever causes the `ValueError` does not
+                        # disappear on its own? If Pytop runs for days and
+                        # months, the application will waste quite a lot of
+                        # resources, cumulatively, doing unnecessary work,
+                        # anticipating this sensor to resume correct functioning.
+                        if s.path in previous_energy:
+                            print(f'Before deletion: {s}, {previous_energy}')
+                            del previous_energy[s.path]
+                            print(f'after deletion: {s}, {previous_energy}')
+
+                        continue
+
+                    if s.path not in previous_energy:
+                        previous_energy[s.path] = (
+                            current_energy_uj,
+                            current_timestamp,
+                        )
+                        power_consumption_watt[s.path] = None
+                        continue
+
+                    previous_energy_uj = previous_energy[s.path][0]
+                    previous_timestamp = previous_energy[s.path][1]
+
+                    energy_delta_uj = current_energy_uj - previous_energy_uj
+                    energy_delta_j = energy_delta_uj / 1_000_000
+                    time_ns = current_timestamp - previous_timestamp
+                    time_s = time_ns / 1_000_000_000
+
+                    power_consumed_w = energy_delta_j / time_s
+                    power_consumption_watt[s.path] = power_consumed_w
+
+                    previous_energy[s.path] = (
+                        current_energy_uj,
+                        current_timestamp,
+                    )
+                except FileNotFoundError:
+                    warnings.warn(
+                        PowerTelemetrySensorNotFoundWarning(s.name, s.path)
+                    )
+                    break
+                except PermissionError:
+                    warnings.warn(
+                        PowerTelemetrySensorPermissionWarning(s.name, s.path)
+                    )
+                    break
+
+        with warnings.catch_warnings():
+            warnings.simplefilter('error')
+
+            try:
+                calculate_power_consumption()
+            except (
+                PowerTelemetrySensorNotFoundWarning,
+                PowerTelemetrySensorPermissionWarning,
+            ) as warning:
+                with warnings.catch_warnings():
+                    warnings.simplefilter('default')
+
+                    warnings.warn(warning)
+
+                    power_telemetry_sensors = discover_power_telemetry_sensors(
+                        sys_path
+                    )
+
+                    # TODO: Handle the case when this call also raises a warning.
+                    calculate_power_consumption()
 
         return TmpCpuStats(
             name=name,
@@ -233,6 +360,7 @@ def create_cpu_monitor(proc_path: Path = Path('/proc')) -> GetCpuStats:
             load_avg_5min=load_avg_5min,
             load_avg_15min=load_avg_15min,
             usage_percent=usage_percent,
+            power_consumption_watt=power_consumption_watt,
         )
 
     return get_cpu_stats
