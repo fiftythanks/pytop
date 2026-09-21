@@ -63,9 +63,3 @@ class EnergyUjPermissionWarning(PermissionWarning):
     def __init__(self, backend: str, zone_dir_name: str, energy_uj_path: Path):
         msg = f'{backend} zone {zone_dir_name} has an energy_uj file that cannot be read due to permission issues.'
         super().__init__(energy_uj_path, msg)
-
-
-class PowerTelemetrySensorValueWarning(ValueWarning):
-    def __init__(self, value: str, sensor_value_source_path: Path):
-        msg = f'Unlikely sensor value in file {sensor_value_source_path}: {value}.'
-        super().__init__(0, msg)

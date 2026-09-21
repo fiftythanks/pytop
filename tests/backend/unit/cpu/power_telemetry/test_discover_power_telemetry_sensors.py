@@ -4,6 +4,7 @@ from typing import Protocol
 
 from pytest import fixture, mark, warns
 
+from pytop.backend.cpu.exceptions import PowerTelemetrySensorValueWarning
 from pytop.backend.cpu.power_telemetry.discover_power_telemetry_sensors import (
     discover_power_telemetry_sensors,
 )
@@ -14,7 +15,6 @@ from pytop.backend.cpu.power_telemetry.exceptions import (
     PowercapInterfaceNotFoundWarning,
     PowercapNotFoundWarning,
     PowerTelemetryNotFoundWarning,
-    PowerTelemetrySensorValueWarning,
     ZoneFileEmptyWarning,
     ZoneNameNotFoundWarning,
     ZoneNamePermissionWarning,
