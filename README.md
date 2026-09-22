@@ -1,6 +1,9 @@
-# Pytop
+# Pytop (Archived Prototype)
 
-An experimental, pure-Python Linux system monitor built from scratch. Inspired by the layout and UI of [btop](https://github.com/aristocratos/btop).
+> **STATUS: Concept Prototype.**
+> Development on the pure-Python implementation of this full system monitor has been concluded. While the OS virtualization and process telemetry (`/proc`) modules were successfully built and tested, deep research into Linux power capping (`/sys/class/powercap`) revealed immense underlying complexity. To build a truly robust, production-grade tool, I realized I needed to drastically cut my scope and focus exclusively on high-precision telemetry, rather than a monolithic UI clone.
+>
+> Development has officially pivoted to a hyper-focused, extensible systems programming project in **Rust** to deeply explore advanced kernel interfaces.
 
 ## Goals & Philosophy
 * **No External Dependencies:** Built using the Python 3.13+ Standard Library. No `psutil`, no C/C++ extensions.
@@ -31,3 +34,13 @@ The project enforces 100% strict type checking (`basedpyright`) and comprehensiv
 * **God Fixtures:** The initial unit tests for `create_process_monitor()` were written using a static "God Fixture" that generated 27 edge-case processes. This has been refactored in newer modules, but remains in the `proc` tests to save development time.
 * **Hwmon Power Fallback:** Currently, power telemetry relies exclusively on the `powercap` framework (Intel RAPL / ARM SCMI), which covers ~95% of modern hardware. Parsing `/sys/class/hwmon` for legacy or niche power sensors is stubbed and planned for a future v1.x release.
 * **MSR Fallback:** Currently, power telemetry relies on sysfs (`powercap`). Future updates could explore direct hardware interaction via `/dev/cpu/*/msr` (requiring `CAP_SYS_RAWIO`) as a fallback for unsupported architectures.
+
+## Post-Mortem: The Pivot to Rust & Scope Reduction
+During the implementation of Intel RAPL and ARM SCMI and research of the HWMON interface for power telemetry, I confronted the reality of modern hardware monitoring. Building a feature-complete clone of `btop` forces a superficial understanding of a massive surface area. To build a proper telemetry engine, I needed to drastically reduce my scope and switch to a language suited for low-level kernel interaction.
+
+Here is what prompted the pivot:
+1. **The PLATYPUS Vulnerability (CVE-2020-8694):** Unprivileged sysfs power polling was disabled in Linux 5.10+ because malicious actors could use power fluctuations to extract AES/RSA keys. Modern power telemetry requires careful privilege management, making unprivileged user-space polling inherently brittle.
+2. **Heterogeneous Hardware (HSMP & MSRs):** Relying solely on sysfs ignores AMD's Host System Management Port (`/dev/hsmp`) ioctls and direct Model-Specific Registers (`/dev/cpu/*/msr`), which are often required for enterprise-grade hardware.
+3. **The VFS & GIL Bottleneck:** Reading `/sys` in a tight Python `while` loop invokes massive POSIX overhead. The kernel serializes binary data to ASCII, and Python dynamically allocates strings only to garbage-collect them microseconds later. This creates an "observer effect" that artificially inflates CPU power draw.
+
+To interact with binary C-structs natively, handle hardware syscalls safely, and achieve cycle-accurate profiling, the next iteration of this journey will be a hyper-focused telemetry library built in **Rust**.
