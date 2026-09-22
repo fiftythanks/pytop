@@ -1,33 +1,69 @@
 # Pytop
 
-An experimental, pure-Python Linux system monitor built from scratch. Inspired by the layout and UI of [btop](https://github.com/aristocratos/btop).
+> **Status: Prototype & Systems Exploration (Archived)**
+>
+> Pytop is an experimental, zero-dependency Python 3.13 backend prototype built to explore low-level Linux kernel interfaces (`/proc` and `/sys`) from scratch. It gathers process and CPU power telemetry without third-party libraries such as `psutil`.
+>
+> Having successfully built the core telemetry parsers and verified them with an extensive test suite, development concluded without implementing a TUI layer. High-frequency polling and dynamic string parsing over the Linux virtual filesystem highlighted the inherent runtime overhead of Python for low-level systems monitoring, prompting a pivot towards systems programming in Rust.
 
-## Goals & Philosophy
-* **No External Dependencies:** Built using the Python 3.13+ Standard Library. No `psutil`, no C/C++ extensions.
-* **Systems Programming Education:** The primary goal of this project is to understand the Linux kernel's interfaces (`/proc` and `/sys`) by manually parsing hardware telemetry, process states, and OS metrics.
-* **Defensive Architecture:** The Linux virtual filesystem is a hostile environment. Files disappear, permissions change dynamically, and hardware sensors report corrupted data. This daemon is built to degrade gracefully rather than crash.
+---
 
-## Architecture & Implementation Details
+## Overview & Philosophy
 
-### Data Gathering: Polling vs. Discovery
-To maintain a low overhead footprint, the application separates metric collection into two phases:
-1. **Discovery (Run Once):** At startup, the app crawls `/sys/class/powercap` to identify valid hardware sensors and topologies.
-2. **Polling (Run Continuously):** The app retains the `pathlib.Path` references to the exact hardware files and reads them directly on a fixed interval, avoiding expensive, repetitive `stat()` syscalls.
+* **Zero External Dependencies:** Implemented exclusively with the Python 3.13+ Standard Library (`pathlib`, `dataclasses`, `time`, `warnings`, `pwd`, `os` and `signal`). No `psutil` and no C extensions.
+* **Direct Kernel Interfacing:** All telemetry is derived by parsing the Linux virtual filesystem (`/proc` and `/sys`) and invoking standard POSIX system calls.
+* **Defensive Failure Handling:** Virtual filesystem files can vanish between reads, unprivileged users encounter permission boundaries and hardware sensors occasionally emit empty or corrupted values. The engine isolates errors, emits granular custom warnings and falls back to `None` instead of raising unhandled exceptions.
 
-### Power & Energy Telemetry (Intel RAPL & ARM SCMI)
-Power consumption is calculated by reading the Linux Powercap framework. Because the kernel reports cumulative energy consumption in microjoules (`energy_uj`), the backend acts as a state machine. It captures the energy at $T_1$ and $T_2$, measures the elapsed time using `time.monotonic_ns()`, and calculates the real-time $\Delta$ wattage per CPU zone (`package`, `core`, `uncore` etc.).
+---
 
-### CPU Virtualization & Tick Math
-Overall CPU usage is not reported as a percentage by the kernel. The backend calculates the delta of elapsed `USER_HZ` ticks parsed from `/proc/stat` (comparing the sum of `user`, `system`, and `idle` states between intervals) to compute the true instantaneous CPU utilization.
+## Core Architecture
 
-## Testing Strategy
-The project enforces 100% strict type checking (`basedpyright`) and comprehensive unit testing (`pytest`).
+### 1. Process Telemetry (`pytop.backend.proc`)
 
-* **Simulating the OS:** Tests utilize the `tmp_path` fixture to dynamically generate mock `/proc` and `/sys` virtual filesystems, allowing full simulation of missing files, permission errors, and corrupted hardware sensors.
-* **Warnings as Errors:** Pytest is configured to treat all warnings as errors by default. Because the application handles OS edge cases by emitting custom Python `Warnings` (e.g., `ProcStatPermissionWarning`) instead of crashing, tests must explicitly assert that the correct warnings are fired under the correct failure conditions.
-* **Zombie Process Annihilation:** Integration tests spawn real subprocesses to test signaling (`SIGTERM`, `SIGKILL`) and priority scheduling (`renice`). Pytest fixtures use strict `yield` and `finally` escalation blocks (`terminate` -> `wait` -> `kill` -> `wait`) to ensure the kernel process table is left completely sterile.
+The process monitor crawls `/proc` and parses process metadata:
 
-## Technical Debt & Roadmap
-* **God Fixtures:** The initial unit tests for `create_process_monitor()` were written using a static "God Fixture" that generated 27 edge-case processes. This has been refactored in newer modules, but remains in the `proc` tests to save development time.
-* **Hwmon Power Fallback:** Currently, power telemetry relies exclusively on the `powercap` framework (Intel RAPL / ARM SCMI), which covers ~95% of modern hardware. Parsing `/sys/class/hwmon` for legacy or niche power sensors is stubbed and planned for a future v1.x release.
-* **MSR Fallback:** Currently, power telemetry relies on sysfs (`powercap`). Future updates could explore direct hardware interaction via `/dev/cpu/*/msr` (requiring `CAP_SYS_RAWIO`) as a fallback for unsupported architectures.
+* **Instantaneous CPU Utilisation:** Derives CPU usage per process across sampling intervals by computing elapsed `USER_HZ` ticks against system-wide tick deltas from `/proc/stat`. Supports IRIX mode, scaling calculations across available CPU cores:
+  $$\text{utilisation} = \left(\frac{\Delta\text{process ticks}}{\Delta\text{cpu ticks}}\right) \times 100 \times \text{cores}$$
+* **Process Lifecycles & State:** Parses `/proc/[pid]/status`, `/proc/[pid]/cmdline` and `/proc/[pid]/io` for memory footprint (`VmRSS`), process state flags (`State`), thread counts, I/O read/write byte counts and process uptime using `os.sysconf('SC_CLK_TCK')`.
+* **User Resolution:** Maps effective user IDs (`euid`) to system usernames via `pwd.getpwuid` with safe fallback to raw numerical IDs.
+
+### 2. Process Actions (`pytop.backend.proc.actions`)
+
+Provides POSIX process management primitives wrapped in typed exceptions:
+
+* **Priority Scheduling (`renice`):** Adjusts process nice values ($-20$ to $19$) via `os.setpriority(os.PRIO_PROCESS, pid, priority)`.
+* **Signal Dispatch (`send_signal`):** Dispatches standard POSIX signals (1–31) to target processes via `os.kill(pid, sig)`.
+* **Typed Error Wrappers:** Translates `PermissionError` and `ProcessLookupError` into distinct project exceptions (`RenicePermissionError`, `SignalPermissionError` and `ProcActionProcessLookupError`).
+
+### 3. CPU & Power Telemetry (`pytop.backend.cpu`)
+
+Monitors overall system utilisation and hardware energy counters:
+
+* **Tick Mathematics:** Parses `/proc/stat` to accumulate tick distributions (`user`, `nice`, `system`, `idle`, `iowait`, `irq`, `softirq` and `steal`), calculating overall CPU utilisation percentages across polling intervals.
+* **System Metrics:** Parses `/proc/uptime`, `/proc/loadavg` (1-, 5- and 15-minute load averages) and `/proc/cpuinfo` (model designation).
+* **Powercap Energy Telemetry:** Discovers and traverses the Linux Powercap hierarchy (`/sys/class/powercap`), supporting Intel RAPL and ARM SCMI topologies (packages and subzones). Because energy is reported as cumulative microjoules (`energy_uj`), the backend maintains a state machine measuring delta microjoules against high-resolution monotonic timestamps (`time.monotonic_ns()`) to calculate real-time wattage:
+  $$P\text{ (Watts)} = \frac{\Delta E\text{ (Joules)}}{\Delta t\text{ (Seconds)}}$$
+
+---
+
+## Quality Infrastructure & Testing
+
+The repository maintains strict typing, automated formatting and comprehensive test coverage:
+
+* **Test Suite:** 460+ automated tests executed with `pytest` (exceeding 3,600 lines of test code).
+* **VFS Simulation:** Unit tests utilise pytest's `tmp_path` fixture to construct mock `/proc` and `/sys` directory trees, verifying behaviour against edge cases including missing entries, empty strings, permission denials and corrupted sensor data.
+* **Custom Warning Assertions:** Pytest runs with warnings configured as errors (`filterwarnings = ["error"]`). Tests explicitly verify that non-fatal kernel conditions emit the exact expected warning subclasses (e.g. `ProcStatPermissionWarning`, `ZoneNameNotFoundWarning`, `PowerTelemetrySensorValueWarning`).
+* **Subprocess Integration Tests:** Integration suites in `tests/backend/integration/test_proc.py` spawn real child processes to validate `renice` priority adjustments and signal propagation (`SIGTERM`), with strict teardown fixtures (`terminate` $\rightarrow$ `wait` $\rightarrow$ `kill` $\rightarrow$ `wait`) ensuring clean process cleanup.
+* **Type Safety:** 100% strict type checking with `basedpyright` in strict mode with zero errors and zero warnings.
+* **Code Standards:** Linted and formatted using `ruff` adhering to strict PEP 8 conventions.
+
+---
+
+## Reflections & Pivot
+
+Building Pytop provided valuable hands-on experience with Linux kernel interfaces, process management and hardware telemetry. However, exploring high-frequency sampling over `/sys` and `/proc` in Python revealed fundamental limitations:
+
+1. **Virtual Filesystem Overhead:** Reading kernel VFS nodes requires frequent filesystem calls where the kernel serialises internal structures into text, which Python must parse and allocate dynamically into strings on every polling cycle.
+2. **Low-Level Systems Requirements:** Hardware-level telemetry and high-frequency profiling benefit significantly from direct binary structures, unbuffered file descriptors and predictable memory footprints without garbage collection pauses.
+
+These insights led to concluding this exploratory prototype and shifting focus to systems programming in Rust.
