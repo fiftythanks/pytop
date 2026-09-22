@@ -1,7 +1,7 @@
 [project]
 name = "pytop"
 version = "0.1.0"
-description = "An experimental Linux system monitor written from scratch in Python for educational purposes, inspired by the layout and UI of [btop](https://github.com/aristocratos/btop)."
+description = "An experimental, pure-Python Linux system monitor built from scratch. Inspired by the layout and UI of [btop](https://github.com/aristocratos/btop)."
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = []
