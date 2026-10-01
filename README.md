@@ -23,7 +23,9 @@
 The process monitor crawls `/proc` and parses process metadata:
 
 * **Instantaneous CPU Utilisation:** Derives CPU usage per process across sampling intervals by computing elapsed `USER_HZ` ticks against system-wide tick deltas from `/proc/stat`. Supports IRIX mode, scaling calculations across available CPU cores:
-  $$\text{utilisation} = \left(\frac{\Delta\text{process ticks}}{\Delta\text{cpu ticks}}\right) \times 100 \times \text{cores}$$
+
+    $$\text{utilisation} = \left(\frac{\Delta\text{process ticks}}{\Delta\text{cpu ticks}}\right) \times 100 \times \text{cores}$$
+
 * **Process Lifecycles & State:** Parses `/proc/[pid]/status`, `/proc/[pid]/cmdline` and `/proc/[pid]/io` for memory footprint (`VmRSS`), process state flags (`State`), thread counts, I/O read/write byte counts and process uptime using `os.sysconf('SC_CLK_TCK')`.
 * **User Resolution:** Maps effective user IDs (`euid`) to system usernames via `pwd.getpwuid` with safe fallback to raw numerical IDs.
 
@@ -31,7 +33,7 @@ The process monitor crawls `/proc` and parses process metadata:
 
 Provides POSIX process management primitives wrapped in typed exceptions:
 
-* **Priority Scheduling (`renice`):** Adjusts process nice values ($-20$ to $19$) via `os.setpriority(os.PRIO_PROCESS, pid, priority)`.
+* **Priority Scheduling (`renice`):** Adjusts process nice values (−20 to −19) via `os.setpriority(os.PRIO_PROCESS, pid, priority)`.
 * **Signal Dispatch (`send_signal`):** Dispatches standard POSIX signals (1–31) to target processes via `os.kill(pid, sig)`.
 * **Typed Error Wrappers:** Translates `PermissionError` and `ProcessLookupError` into distinct project exceptions (`RenicePermissionError`, `SignalPermissionError` and `ProcActionProcessLookupError`).
 
@@ -42,6 +44,7 @@ Monitors overall system utilisation and hardware energy counters:
 * **Tick Mathematics:** Parses `/proc/stat` to accumulate tick distributions (`user`, `nice`, `system`, `idle`, `iowait`, `irq`, `softirq` and `steal`), calculating overall CPU utilisation percentages across polling intervals.
 * **System Metrics:** Parses `/proc/uptime`, `/proc/loadavg` (1-, 5- and 15-minute load averages) and `/proc/cpuinfo` (model designation).
 * **Powercap Energy Telemetry:** Discovers and traverses the Linux Powercap hierarchy (`/sys/class/powercap`), supporting Intel RAPL and ARM SCMI topologies (packages and subzones). Because energy is reported as cumulative microjoules (`energy_uj`), the backend maintains a state machine measuring delta microjoules against high-resolution monotonic timestamps (`time.monotonic_ns()`) to calculate real-time wattage:
+
   $$P\text{ (Watts)} = \frac{\Delta E\text{ (Joules)}}{\Delta t\text{ (Seconds)}}$$
 
 ---
